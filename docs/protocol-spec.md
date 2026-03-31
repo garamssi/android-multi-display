@@ -60,6 +60,8 @@ adb forward tcp:7102 tcp:7102   # Input
 | 0x08 | PONG | 양방향 | Ping 응답 |
 | 0x09 | ERROR | 양방향 | 에러 보고 |
 | 0x0A | DISCONNECT | 양방향 | 정상 종료 |
+| 0x0B | BITRATE_UPDATE | Server → Client | 비트레이트 변경 통보 |
+| 0x0C | CONFIG_UPDATE | 양방향 | 스트림 중 설정 변경 요청 |
 
 ### 3.2 핸드셰이크 흐름
 
@@ -144,9 +146,31 @@ Payload: JSON (UTF-8)
 
 Payload: 8 bytes (int64) — 전송 시각 타임스탬프 (밀리초, Unix epoch)
 
-PING 간격: 1초. 3회 연속 미응답 시 연결 끊김으로 판단.
+PING 간격: 1초. 연결 끊김 판단 로직:
+- 마지막으로 성공한 PONG 수신 시각을 기록한다.
+- 현재 시각 - 마지막 PONG 시각 > `PING_TIMEOUT(3초)` 이면 연결 끊김으로 판단한다.
+- 즉, PONG이 3초간 하나도 오지 않으면 끊김이다 (PING 3회분에 해당).
 
-### 3.8 ERROR (0x09)
+### 3.8 BITRATE_UPDATE (0x0B)
+
+서버가 적응형 비트레이트 조절 시 클라이언트에 통보한다. 스트림 중단 없이 전송된다.
+
+Payload: JSON (UTF-8)
+
+```json
+{
+  "bitrateKbps": 15000,
+  "reason": "bandwidth_low"
+}
+```
+
+reason 값: `"bandwidth_low"`, `"bandwidth_high"`, `"cpu_high"`, `"manual"`
+
+### 3.9 CONFIG_UPDATE (0x0C)
+
+스트림 진행 중에도 설정 변경이 가능하다. CONFIG_REQUEST/CONFIG_RESPONSE와 동일한 페이로드를 사용하되, 스트림을 중단하지 않고 적용된다. 해상도 변경 시에는 스트림 재시작이 필요하므로 STOP_STREAM → CONFIG → START_STREAM 시퀀스를 사용한다.
+
+### 3.10 ERROR (0x09)
 
 Payload: JSON (UTF-8)
 
@@ -231,7 +255,7 @@ Flags 비트 필드:
 
 ### 5.2 TOUCH_EVENT (0x20)
 
-Payload (고정 14 bytes):
+Payload (고정 20 bytes):
 
 ```
 +------------+----------+----------+--------------+---------------+
@@ -245,7 +269,9 @@ Payload (고정 14 bytes):
 +------------+
 ```
 
-총 22 bytes.
+- 터치 데이터: 12 bytes (Action 1 + X 4 + Y 4 + Pressure 2 + PointerID 1)
+- 타임스탬프: 8 bytes
+- 합계: 20 bytes
 
 Action 값:
 
@@ -258,6 +284,10 @@ Action 값:
 
 X, Y 좌표: 0.0 ~ 1.0 정규화 좌표 (가상 디스플레이 해상도 대비 비율)
 
+> **guide.md 원본과의 차이점**: guide.md에서는 X/Y를 4바이트 정수, Timestamp 필드 없이 정의했으나,
+> 본 스펙에서는 해상도 독립성을 위해 float32 정규화 좌표를 채택하고, 레이턴시 측정을 위해 Timestamp를 추가했다.
+> guide.md의 터치 포맷은 이 스펙을 정본으로 갱신한다.
+
 ### 5.3 TOUCH_BATCH (0x21)
 
 여러 터치 이벤트를 묶어서 전송 (네트워크 효율화).
@@ -267,7 +297,7 @@ Payload:
 ```
 +-------------+---------------------------+
 | Count       | TOUCH_EVENT[0..Count-1]   |
-| (2 bytes    | (22 bytes × Count)        |
+| (2 bytes    | (20 bytes × Count)        |
 | uint16)     |                           |
 +-------------+---------------------------+
 ```
