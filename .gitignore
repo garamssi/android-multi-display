@@ -36,3 +36,10 @@ local.properties
 captures/
 .externalNativeBuild/
 .cxx/
+
+# Swift / SPM
+.build/
+.swiftpm/
+*.xcodeproj
+xcuserdata/
+DerivedData/
