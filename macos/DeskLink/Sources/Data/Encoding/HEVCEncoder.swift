@@ -8,6 +8,7 @@ public final class HEVCEncoder: VideoEncoding, @unchecked Sendable {
     private var session: VTCompressionSession?
     private var frameCounter: UInt32 = 0
     private var currentConfig: DisplayConfig?
+    private var pendingForceKeyframe = false
     private let lock = NSLock()
 
     /// Codec-specific data (VPS + SPS + PPS) extracted from the first keyframe.
@@ -66,7 +67,8 @@ public final class HEVCEncoder: VideoEncoding, @unchecked Sendable {
             let bitrate = config.bitrateKbps * 1000
             VTSessionSetProperty(session, key: kVTCompressionPropertyKey_AverageBitRate, value: bitrate as CFNumber)
 
-            let dataRateLimit = [Double(bitrate) * 1.5, 1.0] as CFArray
+            let bytesPerSecond = Double(bitrate) / 8.0
+            let dataRateLimit = [bytesPerSecond * 1.5, 1.0] as CFArray
             VTSessionSetProperty(session, key: kVTCompressionPropertyKey_DataRateLimits, value: dataRateLimit)
 
             VTSessionSetProperty(session, key: kVTCompressionPropertyKey_MaxKeyFrameInterval, value: config.fps * config.keyframeInterval as CFNumber)
@@ -122,6 +124,13 @@ public final class HEVCEncoder: VideoEncoding, @unchecked Sendable {
             // Create presentation timestamp
             let pts = CMTimeMake(value: Int64(frameCounter), timescale: Int32(config.fps))
 
+            // Check if a keyframe was requested
+            var frameProperties: CFDictionary? = nil
+            if pendingForceKeyframe {
+                frameProperties = [kVTEncodeFrameOptionKey_ForceKeyFrame: true] as CFDictionary
+                pendingForceKeyframe = false
+            }
+
             // Encode synchronously using encodeFrame with outputHandler
             var encodedData = Data()
             var isKeyframe = false
@@ -134,7 +143,7 @@ public final class HEVCEncoder: VideoEncoding, @unchecked Sendable {
                 imageBuffer: buffer,
                 presentationTimeStamp: pts,
                 duration: CMTimeMake(value: 1, timescale: Int32(config.fps)),
-                frameProperties: nil,
+                frameProperties: frameProperties,
                 infoFlagsOut: nil
             ) { status, _, sampleBuffer in
                 defer { semaphore.signal() }
@@ -203,15 +212,7 @@ public final class HEVCEncoder: VideoEncoding, @unchecked Sendable {
 
     public func forceKeyframe() async {
         lock.withLock {
-            guard let session = session else { return }
-            let properties = [kVTEncodeFrameOptionKey_ForceKeyFrame: true] as CFDictionary
-            // The next encode call will use these properties via session state
-            VTSessionSetProperty(session, key: kVTCompressionPropertyKey_MaxKeyFrameInterval, value: 1 as CFNumber)
-            // Reset back after next frame in a real implementation
-            if let config = currentConfig {
-                VTSessionSetProperty(session, key: kVTCompressionPropertyKey_MaxKeyFrameInterval,
-                                     value: config.fps * config.keyframeInterval as CFNumber)
-            }
+            pendingForceKeyframe = true
         }
     }
 

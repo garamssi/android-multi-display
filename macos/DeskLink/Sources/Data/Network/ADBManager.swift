@@ -61,13 +61,14 @@ public final class ADBManager: ADBManaging, @unchecked Sendable {
         let output: String
     }
 
-    private func runADB(_ arguments: String...) async throws -> ADBResult {
-        try await withCheckedThrowingContinuation { continuation in
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/local/bin/adb")
-            process.arguments = arguments
+    private static let adbPaths = ["/opt/homebrew/bin/adb", "/usr/local/bin/adb"]
 
+    private func runADB(_ arguments: String...) async throws -> ADBResult {
+        for path in Self.adbPaths {
+            let process = Process()
             let pipe = Pipe()
+            process.executableURL = URL(fileURLWithPath: path)
+            process.arguments = arguments
             process.standardOutput = pipe
             process.standardError = pipe
 
@@ -77,20 +78,11 @@ public final class ADBManager: ADBManaging, @unchecked Sendable {
 
                 let data = pipe.fileHandleForReading.readDataToEndOfFile()
                 let output = String(data: data, encoding: .utf8) ?? ""
-                continuation.resume(returning: ADBResult(exitCode: process.terminationStatus, output: output))
+                return ADBResult(exitCode: process.terminationStatus, output: output)
             } catch {
-                // Try homebrew path
-                process.executableURL = URL(fileURLWithPath: "/opt/homebrew/bin/adb")
-                do {
-                    try process.run()
-                    process.waitUntilExit()
-                    let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                    let output = String(data: data, encoding: .utf8) ?? ""
-                    continuation.resume(returning: ADBResult(exitCode: process.terminationStatus, output: output))
-                } catch {
-                    continuation.resume(throwing: ConnectionError.refused)
-                }
+                continue // Try next path
             }
         }
+        throw ConnectionError.refused
     }
 }
