@@ -13,8 +13,8 @@ import javax.inject.Inject
  * HEVC/H.264 hardware decoder using MediaCodec async callback API.
  */
 class HEVCDecoder @Inject constructor() {
-    private var codec: MediaCodec? = null
-    private var isConfigured = false
+    @Volatile private var codec: MediaCodec? = null
+    @Volatile private var isConfigured = false
 
     /**
      * Configures the decoder for the given codec and resolution.

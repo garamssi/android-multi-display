@@ -1,14 +1,12 @@
 package com.desklink.android.data.network
 
-import com.desklink.android.domain.model.MessageType
 import com.desklink.android.domain.model.ProtocolConstants
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
-import java.io.InputStream
+import java.io.ByteArrayOutputStream
 import java.io.OutputStream
 import java.net.InetSocketAddress
 import java.net.Socket
@@ -48,24 +46,24 @@ class TCPClient @Inject constructor() {
 
     /**
      * Returns a Flow that emits received packets as (type, payload) pairs.
-     * Blocks on IO dispatcher reading from the socket.
+     * Uses ByteArrayOutputStream to avoid O(n²) array concatenation.
      */
     fun receivePackets(): Flow<Pair<Byte, ByteArray>> = flow {
         val input = socket?.getInputStream() ?: throw IllegalStateException("Not connected")
         val readBuffer = ByteArray(ProtocolConstants.SOCKET_BUFFER_SIZE)
-        var accumulator = ByteArray(0)
+        val accumulator = ByteArrayOutputStream(ProtocolConstants.SOCKET_BUFFER_SIZE)
 
-        while (currentCoroutineContext().isActive) {
+        while (currentCoroutineContext()[kotlinx.coroutines.Job]?.isActive != false) {
             val bytesRead = input.read(readBuffer)
-            if (bytesRead == -1) break // connection closed
+            if (bytesRead == -1) break
 
-            // Append to accumulator
-            accumulator = accumulator + readBuffer.copyOf(bytesRead)
+            accumulator.write(readBuffer, 0, bytesRead)
 
-            // Try to unframe packets
+            val data = accumulator.toByteArray()
             var offset = 0
-            while (offset < accumulator.size) {
-                when (val result = PacketFramer.unframe(accumulator, offset, accumulator.size - offset)) {
+
+            while (offset < data.size) {
+                when (val result = PacketFramer.unframe(data, offset, data.size - offset)) {
                     is PacketFramer.UnframeResult.Success -> {
                         emit(Pair(result.type, result.payload))
                         offset += result.consumed
@@ -77,9 +75,10 @@ class TCPClient @Inject constructor() {
                 }
             }
 
-            // Remove consumed bytes
-            if (offset > 0) {
-                accumulator = accumulator.copyOfRange(offset, accumulator.size)
+            // Keep only unconsumed data
+            accumulator.reset()
+            if (offset < data.size) {
+                accumulator.write(data, offset, data.size - offset)
             }
         }
     }.flowOn(Dispatchers.IO)
