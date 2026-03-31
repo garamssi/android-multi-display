@@ -1,6 +1,5 @@
 package com.desklink.android.domain.repository
 
-import android.view.Surface
 import com.desklink.android.domain.model.DisplayConfig
 import kotlinx.coroutines.flow.Flow
 

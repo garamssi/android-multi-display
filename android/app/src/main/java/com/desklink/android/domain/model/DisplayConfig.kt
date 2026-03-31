@@ -13,7 +13,9 @@ data class DisplayConfig(
         H264(0x02);
 
         companion object {
-            fun fromId(id: Byte): Codec = entries.first { it.id == id }
+            fun fromId(id: Byte): Codec =
+                entries.firstOrNull { it.id == id }
+                    ?: throw IllegalArgumentException("Unknown codec id: $id")
         }
     }
 }

@@ -8,6 +8,11 @@ data class TouchEvent(
     val pointerId: UByte,
     val timestampUs: Long,
 ) {
+    init {
+        require(x in 0f..1f) { "x must be normalized (0.0-1.0), got $x" }
+        require(y in 0f..1f) { "y must be normalized (0.0-1.0), got $y" }
+    }
+
     enum class Action(val code: Byte) {
         DOWN(0x00),
         UP(0x01),
@@ -15,7 +20,9 @@ data class TouchEvent(
         CANCEL(0x03);
 
         companion object {
-            fun fromCode(code: Byte): Action = entries.first { it.code == code }
+            fun fromCode(code: Byte): Action =
+                entries.firstOrNull { it.code == code }
+                    ?: throw IllegalArgumentException("Unknown touch action code: $code")
         }
     }
 
