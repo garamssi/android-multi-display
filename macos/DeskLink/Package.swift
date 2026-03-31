@@ -8,9 +8,23 @@ let package = Package(
         .macOS(.v14),
     ],
     targets: [
+        .target(
+            name: "CGVirtualDisplayBridge",
+            path: "Sources/CGVirtualDisplayBridge",
+            publicHeadersPath: "include",
+            linkerSettings: [
+                .linkedFramework("CoreGraphics"),
+                .linkedFramework("AppKit"),
+            ]
+        ),
         .executableTarget(
             name: "DeskLink",
-            path: "Sources"
+            dependencies: ["CGVirtualDisplayBridge"],
+            path: "Sources",
+            exclude: ["CGVirtualDisplayBridge"],
+            linkerSettings: [
+                .linkedFramework("CoreGraphics"),
+            ]
         ),
         .testTarget(
             name: "DeskLinkTests",
