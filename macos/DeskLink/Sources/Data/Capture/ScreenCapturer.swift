@@ -2,10 +2,19 @@ import Foundation
 @preconcurrency import CoreGraphics
 import IOSurface
 import CoreVideo
+import Darwin.Mach
 
 public final class ScreenCapturer: ScreenCapturing, @unchecked Sendable {
     private var displayStream: CGDisplayStream?
     private let lock = NSLock()
+
+    /// Mach timebase info for converting Mach absolute time to nanoseconds.
+    /// Computed once and cached (thread-safe since it's immutable after init).
+    private static let timebaseInfo: mach_timebase_info_data_t = {
+        var info = mach_timebase_info_data_t()
+        mach_timebase_info(&info)
+        return info
+    }()
 
     public init() {}
 
@@ -41,7 +50,10 @@ public final class ScreenCapturer: ScreenCapturing, @unchecked Sendable {
                     guard status == .frameComplete else { return }
                     guard let surface = frameSurface else { return }
 
-                    let timestampUs = Int64(displayTime * 1_000_000)
+                    // Convert Mach absolute time to microseconds
+                    let info = ScreenCapturer.timebaseInfo
+                    let nanoseconds = displayTime * UInt64(info.numer) / UInt64(info.denom)
+                    let timestampUs = Int64(nanoseconds / 1_000)
 
                     IOSurfaceLock(surface, .readOnly, nil)
                     let baseAddress = IOSurfaceGetBaseAddress(surface)
