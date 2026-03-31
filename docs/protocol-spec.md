@@ -1,0 +1,354 @@
+# DeskLink Protocol Specification v1.0
+
+## 개요
+
+Mac 서버와 Android 클라이언트 간 통신 프로토콜 정의.
+모든 멀티바이트 값은 **Big-Endian** 바이트 순서를 사용한다.
+
+---
+
+## 1. 통신 채널
+
+| 채널 | 용도 | 전송 방식 | 기본 포트 |
+|------|------|-----------|-----------|
+| Control | 핸드셰이크, 설정 협상, 상태 제어 | TCP | 7100 |
+| Video | HEVC 인코딩 프레임 스트림 | TCP | 7101 |
+| Input | 터치/입력 이벤트 역전송 | TCP | 7102 |
+
+USB 모드에서는 ADB port forwarding으로 연결한다:
+```bash
+adb forward tcp:7100 tcp:7100   # Control
+adb forward tcp:7101 tcp:7101   # Video
+adb forward tcp:7102 tcp:7102   # Input
+```
+
+---
+
+## 2. 패킷 프레이밍 (공통)
+
+모든 채널은 동일한 프레이밍 구조를 사용한다:
+
+```
++----------------+-------------+------------------+
+| Length (4byte) | Type (1byte)| Payload (N byte) |
++----------------+-------------+------------------+
+```
+
+| 필드 | 크기 | 설명 |
+|------|------|------|
+| Length | 4 bytes (uint32) | Type + Payload의 총 바이트 수 |
+| Type | 1 byte (uint8) | 메시지 타입 코드 |
+| Payload | 가변 | 메시지 본문 |
+
+최대 패킷 크기: 4MB (4,194,304 bytes)
+
+---
+
+## 3. Control 채널 메시지
+
+### 3.1 메시지 타입
+
+| Type Code | 이름 | 방향 | 설명 |
+|-----------|------|------|------|
+| 0x01 | HANDSHAKE_REQUEST | Client → Server | 연결 요청 |
+| 0x02 | HANDSHAKE_RESPONSE | Server → Client | 연결 응답 |
+| 0x03 | CONFIG_REQUEST | Client → Server | 설정 변경 요청 |
+| 0x04 | CONFIG_RESPONSE | Server → Client | 설정 변경 응답 |
+| 0x05 | START_STREAM | Server → Client | 스트림 시작 알림 |
+| 0x06 | STOP_STREAM | 양방향 | 스트림 중단 |
+| 0x07 | PING | 양방향 | 연결 유지 확인 |
+| 0x08 | PONG | 양방향 | Ping 응답 |
+| 0x09 | ERROR | 양방향 | 에러 보고 |
+| 0x0A | DISCONNECT | 양방향 | 정상 종료 |
+
+### 3.2 핸드셰이크 흐름
+
+```mermaid
+sequenceDiagram
+    participant C as Android Client
+    participant S as Mac Server
+
+    C->>S: HANDSHAKE_REQUEST (프로토콜 버전, 디바이스 정보)
+    S->>C: HANDSHAKE_RESPONSE (수락/거부, 서버 정보)
+    C->>S: CONFIG_REQUEST (희망 해상도, FPS, 코덱)
+    S->>C: CONFIG_RESPONSE (확정 해상도, FPS, 코덱, 비트레이트)
+    S->>C: START_STREAM (Video/Input 채널 준비 완료)
+```
+
+### 3.3 HANDSHAKE_REQUEST (0x01)
+
+Payload: JSON (UTF-8)
+
+```json
+{
+  "protocolVersion": 1,
+  "clientName": "DeskLink Android",
+  "clientVersion": "1.0.0",
+  "deviceModel": "Xiaoxin Pad 11.1 GT Pro",
+  "osVersion": "Android 14",
+  "screenWidth": 2560,
+  "screenHeight": 1600,
+  "maxFps": 120,
+  "supportedCodecs": ["hevc", "h264"],
+  "touchSupport": true,
+  "multiTouchMaxPoints": 10
+}
+```
+
+### 3.4 HANDSHAKE_RESPONSE (0x02)
+
+Payload: JSON (UTF-8)
+
+```json
+{
+  "protocolVersion": 1,
+  "accepted": true,
+  "serverName": "DeskLink Mac",
+  "serverVersion": "1.0.0",
+  "osVersion": "macOS 26.0",
+  "rejectReason": null
+}
+```
+
+### 3.5 CONFIG_REQUEST (0x03)
+
+Payload: JSON (UTF-8)
+
+```json
+{
+  "width": 2560,
+  "height": 1600,
+  "fps": 60,
+  "codec": "hevc",
+  "bitrateKbps": 20000
+}
+```
+
+### 3.6 CONFIG_RESPONSE (0x04)
+
+Payload: JSON (UTF-8)
+
+```json
+{
+  "accepted": true,
+  "width": 2560,
+  "height": 1600,
+  "fps": 60,
+  "codec": "hevc",
+  "bitrateKbps": 20000,
+  "keyframeInterval": 2
+}
+```
+
+### 3.7 PING / PONG (0x07, 0x08)
+
+Payload: 8 bytes (int64) — 전송 시각 타임스탬프 (밀리초, Unix epoch)
+
+PING 간격: 1초. 3회 연속 미응답 시 연결 끊김으로 판단.
+
+### 3.8 ERROR (0x09)
+
+Payload: JSON (UTF-8)
+
+```json
+{
+  "code": 1001,
+  "message": "Encoder failed to initialize"
+}
+```
+
+에러 코드 범위:
+
+| 범위 | 카테고리 |
+|------|----------|
+| 1000-1099 | 연결 에러 |
+| 1100-1199 | 인코딩/디코딩 에러 |
+| 1200-1299 | 디스플레이 에러 |
+| 1300-1399 | 입력 에러 |
+| 1400-1499 | 설정 에러 |
+
+---
+
+## 4. Video 채널 메시지
+
+### 4.1 메시지 타입
+
+| Type Code | 이름 | 설명 |
+|-----------|------|------|
+| 0x10 | VIDEO_FRAME | 인코딩된 비디오 프레임 |
+| 0x11 | VIDEO_CONFIG | 코덱 설정 데이터 (SPS/PPS/VPS) |
+| 0x12 | KEYFRAME_REQUEST | 키프레임 요청 (Client → Server) |
+
+### 4.2 VIDEO_CONFIG (0x11)
+
+스트림 시작 시 첫 번째로 전송. 디코더 초기화에 필요.
+
+Payload:
+
+```
++-------------------+-----------------+-----------+
+| Codec ID (1 byte) | Config Length   | Config    |
+|                    | (2 bytes)       | Data      |
++-------------------+-----------------+-----------+
+```
+
+| Codec ID | 코덱 |
+|----------|------|
+| 0x01 | H.265 (HEVC) |
+| 0x02 | H.264 (AVC) |
+
+Config Data: CSD (Codec Specific Data) — HEVC의 경우 VPS+SPS+PPS
+
+### 4.3 VIDEO_FRAME (0x10)
+
+Payload:
+
+```
++---------------------+------------------+-----------------+----------+
+| Timestamp (8 bytes) | Flags (1 byte)   | Frame Number    | NAL Data |
+| int64, microseconds | bit field        | (4 bytes uint32)|          |
++---------------------+------------------+-----------------+----------+
+```
+
+Flags 비트 필드:
+
+| Bit | 이름 | 설명 |
+|-----|------|------|
+| 0 | IS_KEYFRAME | 1이면 키프레임 (IDR) |
+| 1 | IS_CONFIG | 1이면 코덱 설정 변경 포함 |
+| 2-7 | Reserved | 미사용, 0 |
+
+---
+
+## 5. Input 채널 메시지
+
+### 5.1 메시지 타입
+
+| Type Code | 이름 | 방향 | 설명 |
+|-----------|------|------|------|
+| 0x20 | TOUCH_EVENT | Client → Server | 터치 이벤트 |
+| 0x21 | TOUCH_BATCH | Client → Server | 터치 이벤트 배치 |
+
+### 5.2 TOUCH_EVENT (0x20)
+
+Payload (고정 14 bytes):
+
+```
++------------+----------+----------+--------------+---------------+
+| Action     | X        | Y        | Pressure     | Pointer ID    |
+| (1 byte)   | (4 bytes | (4 bytes | (2 bytes     | (1 byte       |
+|            | float32) | float32) | uint16 0-65535) | uint8 0-9) |
++------------+----------+----------+--------------+---------------+
+| Timestamp  |
+| (8 bytes   |
+| int64 us)  |
++------------+
+```
+
+총 22 bytes.
+
+Action 값:
+
+| 값 | 이름 | 설명 |
+|----|------|------|
+| 0x00 | DOWN | 터치 시작 |
+| 0x01 | UP | 터치 종료 |
+| 0x02 | MOVE | 터치 이동 |
+| 0x03 | CANCEL | 터치 취소 |
+
+X, Y 좌표: 0.0 ~ 1.0 정규화 좌표 (가상 디스플레이 해상도 대비 비율)
+
+### 5.3 TOUCH_BATCH (0x21)
+
+여러 터치 이벤트를 묶어서 전송 (네트워크 효율화).
+
+Payload:
+
+```
++-------------+---------------------------+
+| Count       | TOUCH_EVENT[0..Count-1]   |
+| (2 bytes    | (22 bytes × Count)        |
+| uint16)     |                           |
++-------------+---------------------------+
+```
+
+최대 Count: 100
+
+---
+
+## 6. 에러 코드 정의
+
+| 코드 | 이름 | 설명 |
+|------|------|------|
+| 1000 | CONNECTION_REFUSED | 서버가 연결 거부 |
+| 1001 | PROTOCOL_MISMATCH | 프로토콜 버전 불일치 |
+| 1002 | TIMEOUT | 응답 시간 초과 |
+| 1003 | CONNECTION_LOST | 연결 끊김 |
+| 1100 | ENCODER_INIT_FAILED | 인코더 초기화 실패 |
+| 1101 | ENCODER_FAILED | 인코딩 중 오류 |
+| 1102 | DECODER_INIT_FAILED | 디코더 초기화 실패 |
+| 1103 | DECODER_FAILED | 디코딩 중 오류 |
+| 1104 | CODEC_NOT_SUPPORTED | 지원하지 않는 코덱 |
+| 1200 | DISPLAY_CREATE_FAILED | 가상 디스플레이 생성 실패 |
+| 1201 | DISPLAY_CAPTURE_FAILED | 화면 캡처 실패 |
+| 1202 | DISPLAY_RESOLUTION_INVALID | 잘못된 해상도 |
+| 1300 | INPUT_INJECTION_FAILED | 입력 주입 실패 |
+| 1301 | INPUT_PERMISSION_DENIED | 입력 권한 없음 |
+| 1400 | CONFIG_INVALID | 잘못된 설정 값 |
+| 1401 | CONFIG_NEGOTIATION_FAILED | 설정 협상 실패 |
+
+---
+
+## 7. 타이밍 상수
+
+| 상수 | 값 | 설명 |
+|------|-----|------|
+| HANDSHAKE_TIMEOUT | 5,000 ms | 핸드셰이크 완료 제한 시간 |
+| PING_INTERVAL | 1,000 ms | Ping 전송 간격 |
+| PING_TIMEOUT | 3,000 ms | Pong 응답 대기 시간 |
+| RECONNECT_DELAY | 1,000 ms | 재연결 초기 대기 시간 |
+| RECONNECT_MAX_DELAY | 30,000 ms | 재연결 최대 대기 시간 (지수 백오프) |
+| RECONNECT_MAX_ATTEMPTS | 10 | 최대 재연결 시도 횟수 |
+| STREAM_START_TIMEOUT | 3,000 ms | 스트림 시작 대기 시간 |
+
+---
+
+## 8. ADB 포트 포워딩 명령
+
+```bash
+# USB 연결 시 포트 포워딩 설정
+adb forward tcp:7100 tcp:7100
+adb forward tcp:7101 tcp:7101
+adb forward tcp:7102 tcp:7102
+
+# 포트 포워딩 해제
+adb forward --remove tcp:7100
+adb forward --remove tcp:7101
+adb forward --remove tcp:7102
+
+# 전체 해제
+adb forward --remove-all
+
+# 포워딩 목록 확인
+adb forward --list
+```
+
+Android 클라이언트는 `localhost:PORT`로 연결하면 ADB가 USB를 통해 Mac 서버로 터널링한다.
+
+---
+
+## 9. 성능 요구사항
+
+| 항목 | USB 목표 | Wi-Fi 목표 |
+|------|----------|------------|
+| E2E 레이턴시 | ≤ 30ms | ≤ 60ms |
+| 프레임레이트 | 60fps (120fps Gaming) | 60fps |
+| 최대 해상도 | 2560×1600 | 1920×1200 |
+| 비트레이트 | 20-40 Mbps | 10-20 Mbps |
+| Mac CPU | ≤ 10% | ≤ 10% |
+| Android CPU | ≤ 15% | ≤ 15% |
+
+TCP 소켓 옵션:
+- `TCP_NODELAY`: 활성화 (Nagle 알고리즘 비활성화)
+- `SO_SNDBUF` / `SO_RCVBUF`: 2MB
+- `SO_KEEPALIVE`: 활성화
