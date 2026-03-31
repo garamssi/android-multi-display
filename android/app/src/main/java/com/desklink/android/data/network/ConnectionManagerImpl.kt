@@ -7,13 +7,11 @@ import com.desklink.android.domain.model.MessageType
 import com.desklink.android.domain.model.ProtocolConstants
 import com.desklink.android.domain.repository.ConnectionRepository
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.takeWhile
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -44,54 +42,56 @@ class ConnectionManagerImpl @Inject constructor(
 
             _connectionState.value = ConnectionState.Handshaking("Waiting for server...")
 
-            // Wait for handshake response (read one packet)
-            var handshakeAccepted = false
+            // Wait for handshake response — collect until handshake completes or fails
+            var handshakeComplete = false
             var serverName = "Unknown"
-            controlClient.receivePackets().collect { (type, payload) ->
-                when (type) {
-                    MessageType.HANDSHAKE_RESPONSE -> {
-                        when (val result = handshakeClient.parseHandshakeResponse(payload)) {
-                            is HandshakeClient.HandshakeResult.Accepted -> {
-                                handshakeAccepted = true
-                                serverName = result.serverName
+            controlClient.receivePackets()
+                .takeWhile { !handshakeComplete }
+                .collect { (type, payload) ->
+                    when (type) {
+                        MessageType.HANDSHAKE_RESPONSE -> {
+                            when (val result = handshakeClient.parseHandshakeResponse(payload)) {
+                                is HandshakeClient.HandshakeResult.Accepted -> {
+                                    serverName = result.serverName
+                                }
+                                is HandshakeClient.HandshakeResult.Rejected -> {
+                                    _connectionState.value = ConnectionState.Error(ConnectionError.REFUSED)
+                                    handshakeComplete = true
+                                    return@collect
+                                }
                             }
-                            is HandshakeClient.HandshakeResult.Rejected -> {
-                                _connectionState.value = ConnectionState.Error(ConnectionError.REFUSED)
-                                return@collect
+
+                            // Send config request
+                            _connectionState.value = ConnectionState.Negotiating(config)
+                            val configRequest = handshakeClient.buildConfigRequest(config)
+                            controlClient.send(MessageType.CONFIG_REQUEST, configRequest)
+                        }
+
+                        MessageType.CONFIG_RESPONSE -> {
+                            val negotiated = handshakeClient.parseConfigResponse(payload)
+                            if (negotiated != null) {
+                                negotiatedConfig = negotiated
+                            } else {
+                                _connectionState.value = ConnectionState.Error(ConnectionError.CONFIG_NEGOTIATION_FAILED)
+                                handshakeComplete = true
                             }
                         }
 
-                        // Send config request
-                        _connectionState.value = ConnectionState.Negotiating(config)
-                        val configRequest = handshakeClient.buildConfigRequest(config)
-                        controlClient.send(MessageType.CONFIG_REQUEST, configRequest)
-                    }
-
-                    MessageType.CONFIG_RESPONSE -> {
-                        val negotiated = handshakeClient.parseConfigResponse(payload)
-                        if (negotiated != null) {
-                            negotiatedConfig = negotiated
-                        } else {
-                            _connectionState.value = ConnectionState.Error(ConnectionError.CONFIG_NEGOTIATION_FAILED)
-                            return@collect
+                        MessageType.START_STREAM -> {
+                            val finalConfig = negotiatedConfig ?: config
+                            _connectionState.value = ConnectionState.Connected(finalConfig, serverName)
+                            reconnectAttempts = 0
+                            handshakeComplete = true
                         }
-                    }
 
-                    MessageType.START_STREAM -> {
-                        val finalConfig = negotiatedConfig ?: config
-                        _connectionState.value = ConnectionState.Connected(finalConfig, serverName)
-                        reconnectAttempts = 0
-                        return@collect
-                    }
+                        MessageType.ERROR -> {
+                            _connectionState.value = ConnectionState.Error(ConnectionError.REFUSED)
+                            handshakeComplete = true
+                        }
 
-                    MessageType.ERROR -> {
-                        _connectionState.value = ConnectionState.Error(ConnectionError.REFUSED)
-                        return@collect
+                        else -> { /* ignore other messages during handshake */ }
                     }
-
-                    else -> { /* ignore other messages during handshake */ }
                 }
-            }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {

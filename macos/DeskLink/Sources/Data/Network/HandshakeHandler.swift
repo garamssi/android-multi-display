@@ -13,15 +13,21 @@ public final class HandshakeHandler: @unchecked Sendable {
 
     // MARK: - Server-side handshake
 
-    public func handleHandshakeRequest(payload: Data) throws -> (response: Data, clientInfo: ClientInfo) {
+    public enum HandshakeResult {
+        case accepted(response: Data, clientInfo: ClientInfo)
+        case rejected(response: Data, error: ConnectionError)
+    }
+
+    public func handleHandshakeRequest(payload: Data) -> HandshakeResult {
         guard let json = try? JSONSerialization.jsonObject(with: payload) as? [String: Any] else {
-            throw ConnectionError.protocolMismatch
+            let response = makeHandshakeResponse(accepted: false, reason: "Invalid JSON payload")
+            return .rejected(response: response, error: .protocolMismatch)
         }
 
         guard let version = json["protocolVersion"] as? Int,
               version == ProtocolConstants.protocolVersion else {
             let response = makeHandshakeResponse(accepted: false, reason: "Protocol version mismatch")
-            throw ConnectionError.protocolMismatch
+            return .rejected(response: response, error: .protocolMismatch)
         }
 
         let clientInfo = ClientInfo(
@@ -36,7 +42,7 @@ public final class HandshakeHandler: @unchecked Sendable {
         )
 
         let response = makeHandshakeResponse(accepted: true, reason: nil)
-        return (response, clientInfo)
+        return .accepted(response: response, clientInfo: clientInfo)
     }
 
     public func handleConfigRequest(payload: Data, clientInfo: ClientInfo) throws -> (response: Data, config: DisplayConfig) {
