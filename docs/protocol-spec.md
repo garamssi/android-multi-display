@@ -15,11 +15,11 @@ Mac 서버와 Android 클라이언트 간 통신 프로토콜 정의.
 | Video | HEVC 인코딩 프레임 스트림 | TCP | 7101 |
 | Input | 터치/입력 이벤트 역전송 | TCP | 7102 |
 
-USB 모드에서는 ADB port forwarding으로 연결한다:
+USB 모드에서는 ADB **reverse** 터널로 연결한다. Mac이 서버(리슨)이고 Android가 `127.0.0.1`로 접속하는 클라이언트이므로 `adb reverse`(device→host)를 사용한다:
 ```bash
-adb forward tcp:7100 tcp:7100   # Control
-adb forward tcp:7101 tcp:7101   # Video
-adb forward tcp:7102 tcp:7102   # Input
+adb reverse tcp:7100 tcp:7100   # Control
+adb reverse tcp:7101 tcp:7101   # Video
+adb reverse tcp:7102 tcp:7102   # Input
 ```
 
 ---
@@ -252,6 +252,8 @@ Flags 비트 필드:
 |-----------|------|------|------|
 | 0x20 | TOUCH_EVENT | Client → Server | 터치 이벤트 |
 | 0x21 | TOUCH_BATCH | Client → Server | 터치 이벤트 배치 |
+| 0x22 | SCROLL | Client → Server | 스크롤(두 손가락 드래그) |
+| 0x23 | POINTER_BUTTON | Client → Server | 포인터 버튼(좌/우) 누름/뗌 — 롱프레스 우클릭 |
 
 ### 5.2 TOUCH_EVENT (0x20)
 
@@ -304,6 +306,58 @@ Payload:
 
 최대 Count: 100
 
+### 5.4 SCROLL (0x22)
+
+두 손가락 드래그 스크롤. 정규화 델타(뷰/디스플레이 대비 비율)로 전송하며, 서버가
+디스플레이 크기(points)로 환산해 픽셀 스크롤 이벤트로 주입한다.
+
+Payload (고정 8 bytes):
+
+```
++------------+------------+
+| DeltaX     | DeltaY     |
+| (4 bytes   | (4 bytes   |
+| float32)   | float32)   |
++------------+------------+
+```
+
+- DeltaX > 0: 손가락이 오른쪽으로 이동. DeltaY > 0: 손가락이 아래로 이동.
+- 서버는 받은 델타에 natural 부호(콘텐츠가 손가락을 따라감)를 적용해 픽셀 스크롤로 주입한다.
+- 스크롤 감도(배율)와 방향(Natural/Reversed)은 클라이언트가 전송 전에 델타에 적용한다.
+  Reversed는 클라이언트가 부호를 반전해 보내므로 서버는 변경 없이 그대로 주입한다.
+
+### 5.5 POINTER_BUTTON (0x23)
+
+포인터 버튼의 누름/뗌을 지정 위치에서 주입한다. 한 손가락 롱프레스를 우클릭으로
+매핑하는 데 사용한다(클라이언트가 DOWN, UP 두 메시지를 연속 전송 = 한 번의 클릭).
+좌표는 TOUCH_EVENT와 동일한 정규화(0..1) 규칙을 따른다.
+
+Payload (고정 10 bytes):
+
+```
++------------+------------+------------+------------+
+| Button     | Action     | X          | Y          |
+| (1 byte)   | (1 byte)   | (4 bytes   | (4 bytes   |
+|            |            | float32)   | float32)   |
++------------+------------+------------+------------+
+```
+
+Button 값:
+
+| 값 | 이름 |
+|----|------|
+| 0x00 | LEFT |
+| 0x01 | RIGHT |
+
+Action 값:
+
+| 값 | 이름 | 설명 |
+|----|------|------|
+| 0x00 | DOWN | 버튼 누름 |
+| 0x01 | UP | 버튼 뗌 |
+
+X, Y 좌표: 0.0 ~ 1.0 정규화 좌표 (가상 디스플레이 해상도 대비 비율).
+
 ---
 
 ## 6. 에러 코드 정의
@@ -345,25 +399,28 @@ Payload:
 
 ## 8. ADB 포트 포워딩 명령
 
-```bash
-# USB 연결 시 포트 포워딩 설정
-adb forward tcp:7100 tcp:7100
-adb forward tcp:7101 tcp:7101
-adb forward tcp:7102 tcp:7102
+> **중요**: Mac이 **서버**(7100~7102 리슨)이고 Android가 `127.0.0.1:PORT`로 접속하는 **클라이언트**이므로,
+> `adb forward`(host→device)가 아니라 **`adb reverse`(device→host)** 를 사용한다. `adb forward`는 서버가 기기에 있을 때 쓰는 방향이라 이 구조에서는 연결되지 않는다.
 
-# 포트 포워딩 해제
-adb forward --remove tcp:7100
-adb forward --remove tcp:7101
-adb forward --remove tcp:7102
+```bash
+# USB 연결 시 reverse 터널 설정 (adb reverse tcp:<devicePort> tcp:<hostPort>)
+adb reverse tcp:7100 tcp:7100   # Control
+adb reverse tcp:7101 tcp:7101   # Video
+adb reverse tcp:7102 tcp:7102   # Input
+
+# reverse 터널 해제
+adb reverse --remove tcp:7100
+adb reverse --remove tcp:7101
+adb reverse --remove tcp:7102
 
 # 전체 해제
-adb forward --remove-all
+adb reverse --remove-all
 
-# 포워딩 목록 확인
-adb forward --list
+# 터널 목록 확인
+adb reverse --list
 ```
 
-Android 클라이언트는 `localhost:PORT`로 연결하면 ADB가 USB를 통해 Mac 서버로 터널링한다.
+Android 클라이언트가 `127.0.0.1:PORT`로 연결하면, `adb reverse`가 기기의 해당 포트를 USB를 통해 Mac 서버로 터널링한다.
 
 ---
 
