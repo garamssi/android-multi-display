@@ -23,4 +23,6 @@ public enum MessageType: UInt8, Sendable {
     // Input channel (0x20-0x2F)
     case touchEvent = 0x20
     case touchBatch = 0x21
+    case scroll = 0x22
+    case pointerButton = 0x23
 }

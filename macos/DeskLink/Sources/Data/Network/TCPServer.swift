@@ -1,28 +1,54 @@
 import Foundation
 import Network
 
-/// TCP server for streaming data to Android client.
-public final class TCPServer: StreamServing, @unchecked Sendable {
+/// TCP server for streaming data to (and receiving bytes from) an Android client
+/// over loopback (ADB forwarding).
+///
+/// The client-connection `AsyncStream` and the received-bytes `AsyncStream`, along
+/// with their continuations, are created **once** in `init` and stored, so every
+/// access returns the same live stream (S-H1). The previous computed-property
+/// pattern rebuilt the stream on each access and overwrote the continuation,
+/// dropping earlier subscribers.
+///
+/// The server is bidirectional: `send` writes framed packets, and a receive loop
+/// yields raw inbound bytes via `receivedBytes` (see `PacketReceiving`) for the
+/// control and input channels.
+public final class TCPServer: StreamServing, PacketReceiving, @unchecked Sendable {
     private var listener: NWListener?
     private var activeConnection: NWConnection?
     private let lock = NSLock()
-    private var connectionContinuation: AsyncStream<ClientConnection>.Continuation?
+
+    private let connectionStream: AsyncStream<ClientConnection>
+    private let connectionContinuation: AsyncStream<ClientConnection>.Continuation
+
+    private let bytesStream: AsyncStream<Data>
+    private let bytesContinuation: AsyncStream<Data>.Continuation
 
     public var clientConnections: AsyncStream<ClientConnection> {
-        AsyncStream { continuation in
-            lock.withLock {
-                self.connectionContinuation = continuation
-            }
-        }
+        connectionStream
     }
 
-    public init() {}
+    public var receivedBytes: AsyncStream<Data> {
+        bytesStream
+    }
+
+    public init() {
+        var connCont: AsyncStream<ClientConnection>.Continuation!
+        connectionStream = AsyncStream(bufferingPolicy: .bufferingNewest(4)) { connCont = $0 }
+        connectionContinuation = connCont
+
+        var bytesCont: AsyncStream<Data>.Continuation!
+        bytesStream = AsyncStream(bufferingPolicy: .bufferingNewest(256)) { bytesCont = $0 }
+        bytesContinuation = bytesCont
+    }
 
     deinit {
         lock.withLock {
             activeConnection?.cancel()
             listener?.cancel()
         }
+        connectionContinuation.finish()
+        bytesContinuation.finish()
     }
 
     public func start(port: UInt16) async throws {
@@ -40,7 +66,7 @@ public final class TCPServer: StreamServing, @unchecked Sendable {
 
             newListener.stateUpdateHandler = { [weak self] state in
                 switch state {
-                case .failed(let error):
+                case .failed:
                     self?.lock.withLock {
                         self?.listener = nil
                     }
@@ -64,9 +90,10 @@ public final class TCPServer: StreamServing, @unchecked Sendable {
             activeConnection = nil
             listener?.cancel()
             listener = nil
-            connectionContinuation?.finish()
-            connectionContinuation = nil
         }
+        // Note: the streams are intentionally NOT finished here so the server can
+        // be started again and continue delivering connections/bytes. They are
+        // finished only in deinit.
     }
 
     public func send(data: Data, type: MessageType) async throws {
@@ -75,11 +102,11 @@ public final class TCPServer: StreamServing, @unchecked Sendable {
             throw ConnectionError.lost
         }
 
-        let packet = PacketFramer.frame(type: type, payload: data)
+        let packet = try PacketFramer.frame(type: type, payload: data)
 
         return try await withCheckedThrowingContinuation { continuation in
             connection.send(content: packet, completion: .contentProcessed { error in
-                if let error = error {
+                if error != nil {
                     continuation.resume(throwing: ConnectionError.lost)
                 } else {
                     continuation.resume()
@@ -98,16 +125,15 @@ public final class TCPServer: StreamServing, @unchecked Sendable {
 
             // Configure connection
             connection.stateUpdateHandler = { [weak self] state in
+                guard let self else { return }
                 switch state {
                 case .ready:
-                    let client = ClientConnection()
-                    self?.lock.withLock {
-                        self?.connectionContinuation?.yield(client)
-                    }
+                    self.connectionContinuation.yield(ClientConnection())
+                    self.startReceiveLoop(on: connection)
                 case .failed, .cancelled:
-                    self?.lock.withLock {
-                        if self?.activeConnection === connection {
-                            self?.activeConnection = nil
+                    self.lock.withLock {
+                        if self.activeConnection === connection {
+                            self.activeConnection = nil
                         }
                     }
                 default:
@@ -116,6 +142,29 @@ public final class TCPServer: StreamServing, @unchecked Sendable {
             }
 
             connection.start(queue: DispatchQueue(label: "com.desklink.connection", qos: .userInteractive))
+        }
+    }
+
+    /// Continuously reads inbound bytes and yields them raw to `receivedBytes`.
+    /// Framing/parsing is done downstream by `FrameAccumulator`.
+    private func startReceiveLoop(on connection: NWConnection) {
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { [weak self] data, _, isComplete, error in
+            guard let self else { return }
+
+            if let data = data, !data.isEmpty {
+                self.bytesContinuation.yield(data)
+            }
+
+            if isComplete || error != nil {
+                // Connection closed or errored; stop reading.
+                return
+            }
+
+            // Keep reading only while this is still the active connection.
+            let stillActive = self.lock.withLock { self.activeConnection === connection }
+            if stillActive {
+                self.startReceiveLoop(on: connection)
+            }
         }
     }
 }

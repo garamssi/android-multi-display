@@ -6,9 +6,7 @@ import Foundation
 /// 3. Receive CONFIG_REQUEST
 /// 4. Send CONFIG_RESPONSE with negotiated settings
 /// 5. Send START_STREAM when ready
-public final class HandshakeHandler: @unchecked Sendable {
-    private let lock = NSLock()
-
+public final class HandshakeHandler: Sendable {
     public init() {}
 
     // MARK: - Server-side handshake
@@ -53,15 +51,38 @@ public final class HandshakeHandler: @unchecked Sendable {
         let requestedWidth = json["width"] as? Int ?? 1920
         let requestedHeight = json["height"] as? Int ?? 1200
         let requestedFps = json["fps"] as? Int ?? 60
-        let requestedCodec = json["codec"] as? String ?? "hevc"
+        let requestedCodec = (json["codec"] as? String ?? "hevc").lowercased()
         let requestedBitrate = json["bitrateKbps"] as? Int ?? 20_000
 
-        // Negotiate: clamp to supported ranges
+        // S-M5: reject zero/invalid resolution (CONFIG_INVALID / 1400) before
+        // negotiating. A non-positive dimension cannot produce a valid display.
+        guard requestedWidth > 0, requestedHeight > 0 else {
+            throw ConnectionError.configInvalid
+        }
+
+        // S-M4: validate the requested codec against the client's advertised
+        // supportedCodecs. Reject unknown or unsupported codecs
+        // (CODEC_NOT_SUPPORTED / 1104).
+        let supported = Set(clientInfo.supportedCodecs.map { $0.lowercased() })
+        guard requestedCodec == "hevc" || requestedCodec == "h264" else {
+            throw ConnectionError.codecNotSupported
+        }
+        guard supported.contains(requestedCodec) else {
+            throw ConnectionError.codecNotSupported
+        }
+
+        // Negotiate: clamp to supported ranges.
         let width = min(requestedWidth, clientInfo.screenWidth)
         let height = min(requestedHeight, clientInfo.screenHeight)
-        let fps = min(requestedFps, clientInfo.maxFps)
+        let fps = min(requestedFps, max(1, clientInfo.maxFps))
         let codec: DisplayConfig.Codec = requestedCodec == "h264" ? .h264 : .hevc
         let bitrate = max(1000, min(requestedBitrate, 40_000))
+
+        // Guard against a clamp that would zero out a dimension (e.g. client
+        // advertised a non-positive screen size).
+        guard width > 0, height > 0, fps > 0 else {
+            throw ConnectionError.configInvalid
+        }
 
         let config = DisplayConfig(
             width: width,
@@ -73,6 +94,36 @@ public final class HandshakeHandler: @unchecked Sendable {
 
         let response = makeConfigResponse(config: config)
         return (response, config)
+    }
+
+    /// Builds an ERROR (0x09) payload for the given connection error, per spec §3.10.
+    public func makeErrorMessage(_ error: ConnectionError, message: String? = nil) -> Data {
+        let json: [String: Any] = [
+            "code": error.rawValue,
+            "message": message ?? Self.defaultMessage(for: error),
+        ]
+        return (try? JSONSerialization.data(withJSONObject: json)) ?? Data()
+    }
+
+    private static func defaultMessage(for error: ConnectionError) -> String {
+        switch error {
+        case .refused: return "Connection refused"
+        case .protocolMismatch: return "Protocol version mismatch"
+        case .timeout: return "Operation timed out"
+        case .lost: return "Connection lost"
+        case .encoderInitFailed: return "Encoder failed to initialize"
+        case .encoderFailed: return "Encoding failed"
+        case .decoderInitFailed: return "Decoder failed to initialize"
+        case .decoderFailed: return "Decoding failed"
+        case .codecNotSupported: return "Requested codec is not supported"
+        case .displayCreateFailed: return "Failed to create virtual display"
+        case .displayCaptureFailed: return "Screen capture failed"
+        case .displayResolutionInvalid: return "Invalid display resolution"
+        case .inputInjectionFailed: return "Input injection failed"
+        case .inputPermissionDenied: return "Input permission denied"
+        case .configInvalid: return "Invalid configuration value"
+        case .configNegotiationFailed: return "Configuration negotiation failed"
+        }
     }
 
     public func makeStartStreamMessage() -> Data {

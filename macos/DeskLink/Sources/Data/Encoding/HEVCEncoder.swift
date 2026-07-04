@@ -4,15 +4,28 @@ import CoreVideo
 import CoreMedia
 
 /// HEVC hardware encoder using VideoToolbox.
+///
+/// S-H4: the previous implementation held an `NSLock` across the blocking
+/// `VTCompressionSessionEncodeFrame` + `semaphore.wait()`, serializing all callers
+/// behind a blocking wait while holding the lock. This version holds the lock only
+/// to snapshot/mutate small pieces of state; the blocking encode runs on a
+/// dedicated serial `encodeQueue` with the lock released, so the lock is never held
+/// across the wait and the cooperative thread pool is never blocked.
+///
+/// VideoToolbox emits AVCC (length-prefixed) NAL units; both the per-frame NAL data
+/// and the CSD (VPS/SPS/PPS) are converted to Annex-B before leaving the encoder.
 public final class HEVCEncoder: VideoEncoding, @unchecked Sendable {
+    private let lock = NSLock()
     private var session: VTCompressionSession?
     private var frameCounter: UInt32 = 0
     private var currentConfig: DisplayConfig?
     private var pendingForceKeyframe = false
-    private let lock = NSLock()
+    private var _codecConfigData: Data?
 
-    /// Codec-specific data (VPS + SPS + PPS) extracted from the first keyframe.
-    public private(set) var codecConfigData: Data?
+    /// Codec-specific data (VPS + SPS + PPS) as Annex-B, extracted from the first keyframe.
+    public var codecConfigData: Data? {
+        get async { lock.withLock { _codecConfigData } }
+    }
 
     public init() {}
 
@@ -83,123 +96,50 @@ public final class HEVCEncoder: VideoEncoding, @unchecked Sendable {
             self.session = session
             self.currentConfig = config
             self.frameCounter = 0
-            self.codecConfigData = nil
+            self._codecConfigData = nil
         }
     }
 
     public func encode(frame: VideoFrame) async throws -> EncodedFrame {
-        try lock.withLock {
-            guard let session = session, let config = currentConfig else {
-                throw ConnectionError.encoderFailed
-            }
-
-            // Create pixel buffer from raw BGRA data
-            var pixelBuffer: CVPixelBuffer?
-            let createStatus = CVPixelBufferCreate(
-                kCFAllocatorDefault,
-                config.width,
-                config.height,
-                kCVPixelFormatType_32BGRA,
-                nil,
-                &pixelBuffer
-            )
-
-            guard createStatus == kCVReturnSuccess, let buffer = pixelBuffer else {
-                throw ConnectionError.encoderFailed
-            }
-
-            // Copy frame data into pixel buffer
-            CVPixelBufferLockBaseAddress(buffer, [])
-            if let baseAddress = CVPixelBufferGetBaseAddress(buffer) {
-                let bytesPerRow = CVPixelBufferGetBytesPerRow(buffer)
-                let height = CVPixelBufferGetHeight(buffer)
-                let bufferSize = bytesPerRow * height
-                let copySize = min(frame.data.count, bufferSize)
-                frame.data.withUnsafeBytes { rawBuffer in
-                    baseAddress.copyMemory(from: rawBuffer.baseAddress!, byteCount: copySize)
-                }
-            }
-            CVPixelBufferUnlockBaseAddress(buffer, [])
-
-            // Create presentation timestamp
-            let pts = CMTimeMake(value: Int64(frameCounter), timescale: Int32(config.fps))
-
-            // Check if a keyframe was requested
-            var frameProperties: CFDictionary? = nil
-            if pendingForceKeyframe {
-                frameProperties = [kVTEncodeFrameOptionKey_ForceKeyFrame: true] as CFDictionary
-                pendingForceKeyframe = false
-            }
-
-            // Encode synchronously using encodeFrame with outputHandler
-            var encodedData = Data()
-            var isKeyframe = false
-            var encodeError: Error?
-
-            let semaphore = DispatchSemaphore(value: 0)
-
-            let encodeStatus = VTCompressionSessionEncodeFrame(
-                session,
-                imageBuffer: buffer,
-                presentationTimeStamp: pts,
-                duration: CMTimeMake(value: 1, timescale: Int32(config.fps)),
-                frameProperties: frameProperties,
-                infoFlagsOut: nil
-            ) { status, _, sampleBuffer in
-                defer { semaphore.signal() }
-
-                guard status == noErr, let sampleBuffer = sampleBuffer else {
-                    encodeError = ConnectionError.encoderFailed
-                    return
-                }
-
-                // Check if keyframe
-                if let attachments = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false) as? [[CFString: Any]],
-                   let first = attachments.first {
-                    isKeyframe = !(first[kCMSampleAttachmentKey_NotSync] as? Bool ?? false)
-                }
-
-                // Extract NAL data
-                guard let dataBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) else {
-                    encodeError = ConnectionError.encoderFailed
-                    return
-                }
-
-                var length: Int = 0
-                var dataPointer: UnsafeMutablePointer<Int8>?
-                CMBlockBufferGetDataPointer(dataBuffer, atOffset: 0, lengthAtOffsetOut: nil, totalLengthOut: &length, dataPointerOut: &dataPointer)
-
-                if let dataPointer = dataPointer, length > 0 {
-                    encodedData = Data(bytes: dataPointer, count: length)
-                }
-
-                // Extract codec config data from keyframes
-                if isKeyframe {
-                    if let formatDesc = CMSampleBufferGetFormatDescription(sampleBuffer) {
-                        self.codecConfigData = Self.extractCodecConfig(from: formatDesc)
-                    }
-                }
-            }
-
-            guard encodeStatus == noErr else {
-                throw ConnectionError.encoderFailed
-            }
-
-            semaphore.wait()
-
-            if let error = encodeError {
-                throw error
-            }
-
-            let result = EncodedFrame(
-                data: encodedData,
-                timestampUs: frame.timestampUs,
-                isKeyframe: isKeyframe,
-                frameNumber: frameCounter
-            )
-            frameCounter += 1
-            return result
+        // Snapshot state under the lock, then release it before the blocking encode.
+        let snapshot: (session: VTCompressionSession, config: DisplayConfig, frameNumber: UInt32, forceKeyframe: Bool)? = lock.withLock {
+            guard let session = session, let config = currentConfig else { return nil }
+            let snap = (session, config, frameCounter, pendingForceKeyframe)
+            pendingForceKeyframe = false
+            return snap
         }
+
+        guard let snapshot else {
+            throw ConnectionError.encoderFailed
+        }
+
+        // Perform the blocking encode + semaphore.wait() with the lock RELEASED
+        // (S-H4). Callers of `encode(frame:)` are already serialized by the video
+        // pipeline's `for try await` loop, so the compression session is still used
+        // one frame at a time; the fix is that we no longer hold `lock` across the
+        // blocking wait, which previously stalled `updateBitrate`/`forceKeyframe`.
+        let output = try Self.performEncode(
+            session: snapshot.session,
+            config: snapshot.config,
+            frame: frame,
+            frameNumber: snapshot.frameNumber,
+            forceKeyframe: snapshot.forceKeyframe
+        )
+
+        // Update shared state under the lock again.
+        lock.withLock {
+            if let csd = output.codecConfigData {
+                _codecConfigData = csd
+            }
+            frameCounter &+= 1
+        }
+
+        return EncodedFrame(
+            data: output.annexBData,
+            timestampUs: frame.timestampUs,
+            isKeyframe: output.isKeyframe,
+            frameNumber: snapshot.frameNumber
+        )
     }
 
     public func updateBitrate(kbps: Int) async {
@@ -216,7 +156,147 @@ public final class HEVCEncoder: VideoEncoding, @unchecked Sendable {
         }
     }
 
-    // MARK: - Private
+    // MARK: - Blocking encode (lock NOT held during the call)
+
+    /// Raw result of a single VideoToolbox encode, already converted to Annex-B.
+    private struct RawEncodeOutput {
+        let annexBData: Data
+        let isKeyframe: Bool
+        /// Annex-B CSD, non-nil only when a keyframe carried a format description.
+        let codecConfigData: Data?
+    }
+
+    /// Mutable box shared with the VideoToolbox completion handler. The handler
+    /// runs to completion before `semaphore.wait()` returns (happens-before), so
+    /// the access is race-free; the reference-type box marked `@unchecked Sendable`
+    /// expresses that to the Swift 6 concurrency checker without per-variable
+    /// "mutation of captured var" warnings.
+    private final class EncodeScratch: @unchecked Sendable {
+        var rawAVCC = Data()
+        var isKeyframe = false
+        var csd: Data?
+        var error: Error?
+    }
+
+    private static func performEncode(
+        session: VTCompressionSession,
+        config: DisplayConfig,
+        frame: VideoFrame,
+        frameNumber: UInt32,
+        forceKeyframe: Bool
+    ) throws -> RawEncodeOutput {
+        // Create the pixel buffer at the CAPTURED frame's actual dimensions so the
+        // pixels line up 1:1. VideoToolbox scales it to the session size on encode.
+        let pbWidth = frame.width > 0 ? frame.width : config.width
+        let pbHeight = frame.height > 0 ? frame.height : config.height
+        var pixelBuffer: CVPixelBuffer?
+        let createStatus = CVPixelBufferCreate(
+            kCFAllocatorDefault,
+            pbWidth,
+            pbHeight,
+            kCVPixelFormatType_32BGRA,
+            nil,
+            &pixelBuffer
+        )
+
+        guard createStatus == kCVReturnSuccess, let buffer = pixelBuffer else {
+            throw ConnectionError.encoderFailed
+        }
+
+        // Copy BGRA rows one at a time, honoring BOTH the source stride
+        // (frame.bytesPerRow, possibly padded) and the destination stride
+        // (the pixel buffer's own bytesPerRow). A flat memcpy skews/duplicates the
+        // image whenever the two strides differ or the sizes don't match.
+        CVPixelBufferLockBaseAddress(buffer, [])
+        if let baseAddress = CVPixelBufferGetBaseAddress(buffer) {
+            let dstBytesPerRow = CVPixelBufferGetBytesPerRow(buffer)
+            let srcBytesPerRow = frame.bytesPerRow > 0 ? frame.bytesPerRow : pbWidth * 4
+            let rowBytes = min(srcBytesPerRow, dstBytesPerRow, pbWidth * 4)
+            frame.data.withUnsafeBytes { rawBuffer in
+                if let src = rawBuffer.baseAddress, srcBytesPerRow > 0 {
+                    let maxRows = min(pbHeight, frame.data.count / srcBytesPerRow)
+                    for row in 0..<maxRows {
+                        memcpy(
+                            baseAddress + row * dstBytesPerRow,
+                            src + row * srcBytesPerRow,
+                            rowBytes
+                        )
+                    }
+                }
+            }
+        }
+        CVPixelBufferUnlockBaseAddress(buffer, [])
+
+        // Presentation timestamp
+        let pts = CMTimeMake(value: Int64(frameNumber), timescale: Int32(config.fps))
+
+        var frameProperties: CFDictionary? = nil
+        if forceKeyframe {
+            frameProperties = [kVTEncodeFrameOptionKey_ForceKeyFrame: true] as CFDictionary
+        }
+
+        // Shared with the completion handler; safe via the semaphore (see EncodeScratch).
+        let scratch = EncodeScratch()
+        let semaphore = DispatchSemaphore(value: 0)
+
+        let encodeStatus = VTCompressionSessionEncodeFrame(
+            session,
+            imageBuffer: buffer,
+            presentationTimeStamp: pts,
+            duration: CMTimeMake(value: 1, timescale: Int32(config.fps)),
+            frameProperties: frameProperties,
+            infoFlagsOut: nil
+        ) { status, _, sampleBuffer in
+            defer { semaphore.signal() }
+
+            guard status == noErr, let sampleBuffer = sampleBuffer else {
+                scratch.error = ConnectionError.encoderFailed
+                return
+            }
+
+            // Keyframe detection
+            if let attachments = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false) as? [[CFString: Any]],
+               let first = attachments.first {
+                scratch.isKeyframe = !(first[kCMSampleAttachmentKey_NotSync] as? Bool ?? false)
+            }
+
+            // Extract NAL data (AVCC)
+            guard let dataBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) else {
+                scratch.error = ConnectionError.encoderFailed
+                return
+            }
+
+            var length: Int = 0
+            var dataPointer: UnsafeMutablePointer<Int8>?
+            CMBlockBufferGetDataPointer(dataBuffer, atOffset: 0, lengthAtOffsetOut: nil, totalLengthOut: &length, dataPointerOut: &dataPointer)
+
+            if let dataPointer = dataPointer, length > 0 {
+                scratch.rawAVCC = Data(bytes: dataPointer, count: length)
+            }
+
+            // Extract Annex-B CSD from keyframes
+            if scratch.isKeyframe, let formatDesc = CMSampleBufferGetFormatDescription(sampleBuffer) {
+                scratch.csd = extractCodecConfig(from: formatDesc)
+            }
+        }
+
+        guard encodeStatus == noErr else {
+            throw ConnectionError.encoderFailed
+        }
+
+        semaphore.wait()
+
+        if let error = scratch.error {
+            throw error
+        }
+
+        // Convert AVCC (4-byte length-prefixed) NAL units to Annex-B for the wire.
+        let annexB = (try? AnnexBConverter.convert(avcc: scratch.rawAVCC, lengthSize: 4)) ?? scratch.rawAVCC
+
+        return RawEncodeOutput(annexBData: annexB, isKeyframe: scratch.isKeyframe, codecConfigData: scratch.csd)
+    }
+
+    // MARK: - CSD extraction (Annex-B)
 
     private static func extractCodecConfig(from formatDescription: CMFormatDescription) -> Data? {
         let mediaSubType = CMFormatDescriptionGetMediaSubType(formatDescription)
@@ -232,7 +312,7 @@ public final class HEVCEncoder: VideoEncoding, @unchecked Sendable {
     private static func extractHEVCConfig(from formatDescription: CMFormatDescription) -> Data? {
         var data = Data()
 
-        // Extract VPS, SPS, PPS parameter sets
+        // Determine the parameter set count.
         var paramSetCount: Int = 0
         CMVideoFormatDescriptionGetHEVCParameterSetAtIndex(
             formatDescription, parameterSetIndex: 0,
@@ -240,6 +320,7 @@ public final class HEVCEncoder: VideoEncoding, @unchecked Sendable {
             parameterSetCountOut: &paramSetCount, nalUnitHeaderLengthOut: nil
         )
 
+        // VPS (0), SPS (1), PPS (2) concatenated as Annex-B.
         for i in 0..<paramSetCount {
             var paramSetPointer: UnsafePointer<UInt8>?
             var paramSetSize: Int = 0
@@ -249,8 +330,7 @@ public final class HEVCEncoder: VideoEncoding, @unchecked Sendable {
                 parameterSetCountOut: nil, nalUnitHeaderLengthOut: nil
             )
             if status == noErr, let pointer = paramSetPointer {
-                // Add Annex-B start code
-                data.append(contentsOf: [0x00, 0x00, 0x00, 0x01])
+                data.append(contentsOf: AnnexBConverter.startCode)
                 data.append(pointer, count: paramSetSize)
             }
         }
@@ -261,31 +341,25 @@ public final class HEVCEncoder: VideoEncoding, @unchecked Sendable {
     private static func extractH264Config(from formatDescription: CMFormatDescription) -> Data? {
         var data = Data()
 
-        // Extract SPS
-        var spsPointer: UnsafePointer<UInt8>?
-        var spsSize: Int = 0
-        var paramCount: Int = 0
+        var paramSetCount: Int = 0
         CMVideoFormatDescriptionGetH264ParameterSetAtIndex(
             formatDescription, parameterSetIndex: 0,
-            parameterSetPointerOut: &spsPointer, parameterSetSizeOut: &spsSize,
-            parameterSetCountOut: &paramCount, nalUnitHeaderLengthOut: nil
+            parameterSetPointerOut: nil, parameterSetSizeOut: nil,
+            parameterSetCountOut: &paramSetCount, nalUnitHeaderLengthOut: nil
         )
-        if let sps = spsPointer {
-            data.append(contentsOf: [0x00, 0x00, 0x00, 0x01])
-            data.append(sps, count: spsSize)
-        }
 
-        // Extract PPS
-        var ppsPointer: UnsafePointer<UInt8>?
-        var ppsSize: Int = 0
-        CMVideoFormatDescriptionGetH264ParameterSetAtIndex(
-            formatDescription, parameterSetIndex: 1,
-            parameterSetPointerOut: &ppsPointer, parameterSetSizeOut: &ppsSize,
-            parameterSetCountOut: nil, nalUnitHeaderLengthOut: nil
-        )
-        if let pps = ppsPointer {
-            data.append(contentsOf: [0x00, 0x00, 0x00, 0x01])
-            data.append(pps, count: ppsSize)
+        for i in 0..<paramSetCount {
+            var pointer: UnsafePointer<UInt8>?
+            var size: Int = 0
+            let status = CMVideoFormatDescriptionGetH264ParameterSetAtIndex(
+                formatDescription, parameterSetIndex: i,
+                parameterSetPointerOut: &pointer, parameterSetSizeOut: &size,
+                parameterSetCountOut: nil, nalUnitHeaderLengthOut: nil
+            )
+            if status == noErr, let pointer = pointer {
+                data.append(contentsOf: AnnexBConverter.startCode)
+                data.append(pointer, count: size)
+            }
         }
 
         return data.isEmpty ? nil : data
