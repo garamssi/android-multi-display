@@ -15,6 +15,8 @@ class DisplayConfigTest {
         assertEquals(60, config.fps)
         assertEquals(DisplayConfig.Codec.HEVC, config.codec)
         assertEquals(20_000, config.bitrateKbps)
+        assertEquals(1920, config.nativeWidth)
+        assertEquals(1200, config.nativeHeight)
     }
 
     @Test
@@ -28,5 +30,41 @@ class DisplayConfigTest {
         assertThrows<IllegalArgumentException> {
             DisplayConfig.Codec.fromId(0x99.toByte())
         }
+    }
+
+    @Test
+    fun `recommendedBitrateKbps scales with width`() {
+        assertEquals(40_000, DisplayConfig.recommendedBitrateKbps(2560))
+        assertEquals(40_000, DisplayConfig.recommendedBitrateKbps(3840))
+        assertEquals(25_000, DisplayConfig.recommendedBitrateKbps(1920))
+        assertEquals(15_000, DisplayConfig.recommendedBitrateKbps(1280))
+        assertEquals(10_000, DisplayConfig.recommendedBitrateKbps(800))
+    }
+
+    @Test
+    fun `forNativeResolution defaults to native size and matching bitrate`() {
+        val config = DisplayConfig.forNativeResolution(2560, 1600)
+        assertEquals(2560, config.width)
+        assertEquals(1600, config.height)
+        assertEquals(2560, config.nativeWidth)
+        assertEquals(1600, config.nativeHeight)
+        assertEquals(40_000, config.bitrateKbps)
+        assertEquals(DisplayConfig.Codec.HEVC, config.codec)
+        assertEquals(60, config.fps)
+    }
+
+    @Test
+    fun `forNativeResolution normalises portrait metrics to landscape`() {
+        val config = DisplayConfig.forNativeResolution(1600, 2560)
+        assertEquals(2560, config.width)
+        assertEquals(1600, config.height)
+        assertEquals(2560, config.nativeWidth)
+        assertEquals(1600, config.nativeHeight)
+    }
+
+    @Test
+    fun `forNativeResolution falls back to defaults on invalid metrics`() {
+        assertEquals(DisplayConfig(), DisplayConfig.forNativeResolution(0, 0))
+        assertEquals(DisplayConfig(), DisplayConfig.forNativeResolution(-1, 1200))
     }
 }

@@ -23,4 +23,6 @@ object MessageType {
     // Input channel (0x20-0x2F)
     const val TOUCH_EVENT: Byte = 0x20
     const val TOUCH_BATCH: Byte = 0x21
+    const val SCROLL: Byte = 0x22
+    const val POINTER_BUTTON: Byte = 0x23
 }

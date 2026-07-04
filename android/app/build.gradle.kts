@@ -45,8 +45,14 @@ android {
 
     @Suppress("UnstableApiUsage")
     testOptions {
-        unitTests.all {
-            it.useJUnitPlatform()
+        unitTests {
+            // Allow calls to android.* stub methods (e.g. MediaCodec.BufferInfo())
+            // to return default values instead of throwing "not mocked" in JVM
+            // unit tests. Individual behaviour is still driven by MockK where needed.
+            isReturnDefaultValues = true
+            all {
+                it.useJUnitPlatform()
+            }
         }
     }
 }
@@ -56,6 +62,7 @@ dependencies {
     implementation(platform(libs.compose.bom))
     implementation(libs.compose.ui)
     implementation(libs.compose.material3)
+    implementation(libs.compose.material.icons.extended)
     implementation(libs.compose.ui.tooling.preview)
     debugImplementation(libs.compose.ui.tooling)
 

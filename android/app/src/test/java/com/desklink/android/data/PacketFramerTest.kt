@@ -2,6 +2,7 @@ package com.desklink.android.data
 
 import com.desklink.android.data.network.PacketFramer
 import com.desklink.android.domain.model.MessageType
+import com.desklink.android.domain.model.ProtocolConstants
 import org.junit.jupiter.api.Assertions.assertArrayEquals
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -73,5 +74,62 @@ class PacketFramerTest {
             assertEquals(type, success.type)
             assertArrayEquals(payload, success.payload)
         }
+    }
+
+    // ---- A-C2 boundary tests (size math in Long) ----
+
+    private fun header(lengthField: Long): ByteArray = byteArrayOf(
+        ((lengthField ushr 24) and 0xFF).toByte(),
+        ((lengthField ushr 16) and 0xFF).toByte(),
+        ((lengthField ushr 8) and 0xFF).toByte(),
+        (lengthField and 0xFF).toByte(),
+        MessageType.PING, // type byte so we have the required 5 header bytes
+    )
+
+    @Test
+    fun `unframe accepts exactly 4MB packet length`() {
+        // packetLength == MAX_PACKET_SIZE (type + payload). Only the header needs to
+        // be present to reach the size checks; the body would be NeedMoreData, but
+        // MAX itself must NOT be rejected as too large.
+        val max = ProtocolConstants.MAX_PACKET_SIZE.toLong()
+        val result = PacketFramer.unframe(header(max))
+        // Header-only buffer: valid length, just not enough body yet.
+        assertTrue(
+            result is PacketFramer.UnframeResult.NeedMoreData,
+            "4MB length must be accepted (needs more data), got $result",
+        )
+    }
+
+    @Test
+    fun `unframe rejects 4MB plus one`() {
+        val overMax = ProtocolConstants.MAX_PACKET_SIZE.toLong() + 1
+        val result = PacketFramer.unframe(header(overMax))
+        assertTrue(result is PacketFramer.UnframeResult.Error, "4MB+1 must be rejected")
+    }
+
+    @Test
+    fun `unframe rejects length less than one`() {
+        val result = PacketFramer.unframe(header(0L))
+        assertTrue(result is PacketFramer.UnframeResult.Error, "length 0 must be rejected")
+    }
+
+    @Test
+    fun `unframe rejects would-be-negative unsigned length`() {
+        // 0xFFFFFFFF read as signed Int would be -1; unsigned Long it is ~4.29e9,
+        // which exceeds MAX and must be rejected as an Error, never a huge alloc.
+        val result = PacketFramer.unframe(header(0xFFFFFFFFL))
+        assertTrue(
+            result is PacketFramer.UnframeResult.Error,
+            "0xFFFFFFFF length must be rejected as too large, got $result",
+        )
+    }
+
+    @Test
+    fun `unframe needs more data when body incomplete`() {
+        val payload = ByteArray(100) { it.toByte() }
+        val packet = PacketFramer.frame(MessageType.VIDEO_FRAME, payload)
+        // Feed everything except the last byte.
+        val result = PacketFramer.unframe(packet, 0, packet.size - 1)
+        assertTrue(result is PacketFramer.UnframeResult.NeedMoreData)
     }
 }

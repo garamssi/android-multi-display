@@ -1,6 +1,5 @@
 package com.desklink.android.data.network
 
-import com.desklink.android.domain.model.MessageType
 import com.desklink.android.domain.model.ProtocolConstants
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -45,21 +44,28 @@ object PacketFramer {
         if (length < 5) return UnframeResult.NeedMoreData
 
         val bb = ByteBuffer.wrap(buffer, offset, length).order(ByteOrder.BIG_ENDIAN)
-        val packetLength = bb.int.toLong() and 0xFFFFFFFFL // unsigned
+        // Read the 4-byte length field as an unsigned 32-bit value into a Long.
+        val packetLength = bb.int.toLong() and 0xFFFFFFFFL
 
-        if (packetLength < 1) return UnframeResult.Error("Invalid packet: length must be >= 1")
-        if (packetLength > ProtocolConstants.MAX_PACKET_SIZE) {
+        // Length must cover at least the 1-byte type field.
+        if (packetLength < 1L) return UnframeResult.Error("Invalid packet: length must be >= 1")
+        // Reject anything above the 4MB cap BEFORE any .toInt() conversion so we never
+        // attempt to allocate a huge / negative ByteArray from a corrupt length field.
+        if (packetLength > ProtocolConstants.MAX_PACKET_SIZE.toLong()) {
             return UnframeResult.Error("Packet too large: $packetLength bytes")
         }
 
-        val totalSize = 4 + packetLength.toInt()
-        if (length < totalSize) return UnframeResult.NeedMoreData
+        // All size math done in Long to avoid Int overflow / sign issues.
+        val totalSize = 4L + packetLength
+        if (length.toLong() < totalSize) return UnframeResult.NeedMoreData
 
+        // Safe: packetLength is guaranteed in [1, MAX_PACKET_SIZE], so these fit in Int.
+        val consumed = totalSize.toInt()
         val type = bb.get()
         val payloadSize = packetLength.toInt() - 1
         val payload = ByteArray(payloadSize)
         bb.get(payload)
 
-        return UnframeResult.Success(type = type, payload = payload, consumed = totalSize)
+        return UnframeResult.Success(type = type, payload = payload, consumed = consumed)
     }
 }

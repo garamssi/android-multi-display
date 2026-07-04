@@ -2,18 +2,32 @@ package com.desklink.android.data.network
 
 import com.desklink.android.domain.model.ProtocolConstants
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
-import java.io.ByteArrayOutputStream
+import java.io.IOException
 import java.io.OutputStream
 import java.net.InetSocketAddress
 import java.net.Socket
 import javax.inject.Inject
 
 /**
- * TCP client for connecting to Mac server via ADB-forwarded localhost ports.
+ * Thrown when the received byte stream cannot be framed per the protocol
+ * (e.g. an impossibly large or invalid length field). This is a *typed*
+ * failure so callers (the connection manager) can distinguish protocol
+ * corruption from ordinary I/O errors and trigger a reconnect instead of
+ * crashing on a raw [RuntimeException].
+ */
+class PacketFramingException(message: String) : IOException(message)
+
+/**
+ * TCP client for connecting to the Mac server via ADB-forwarded localhost ports.
+ *
+ * Connection priority is USB(ADB): we always dial `127.0.0.1:<port>` which ADB
+ * tunnels over USB to the Mac server.
  */
 class TCPClient @Inject constructor() {
     private var socket: Socket? = null
@@ -25,16 +39,28 @@ class TCPClient @Inject constructor() {
     suspend fun connect(port: Int) = withContext(Dispatchers.IO) {
         disconnect()
         val newSocket = Socket()
-        newSocket.tcpNoDelay = true
-        newSocket.sendBufferSize = ProtocolConstants.SOCKET_BUFFER_SIZE
-        newSocket.receiveBufferSize = ProtocolConstants.SOCKET_BUFFER_SIZE
-        newSocket.soTimeout = 0 // blocking reads
-        newSocket.connect(
-            InetSocketAddress("127.0.0.1", port),
-            ProtocolConstants.HANDSHAKE_TIMEOUT.toInt()
-        )
-        socket = newSocket
-        outputStream = newSocket.getOutputStream()
+        try {
+            newSocket.tcpNoDelay = true
+            newSocket.keepAlive = true
+            newSocket.sendBufferSize = ProtocolConstants.SOCKET_BUFFER_SIZE
+            newSocket.receiveBufferSize = ProtocolConstants.SOCKET_BUFFER_SIZE
+            newSocket.soTimeout = 0 // blocking reads
+            newSocket.connect(
+                InetSocketAddress("127.0.0.1", port),
+                ProtocolConstants.HANDSHAKE_TIMEOUT.toInt()
+            )
+            socket = newSocket
+            outputStream = newSocket.getOutputStream()
+        } catch (e: Exception) {
+            // Never leak a half-open socket on a failed connect (A-H3).
+            try {
+                newSocket.close()
+            } catch (_: Exception) {
+            }
+            socket = null
+            outputStream = null
+            throw e
+        }
     }
 
     suspend fun send(type: Byte, payload: ByteArray) = withContext(Dispatchers.IO) {
@@ -45,52 +71,114 @@ class TCPClient @Inject constructor() {
     }
 
     /**
-     * Returns a Flow that emits received packets as (type, payload) pairs.
-     * Uses ByteArrayOutputStream to avoid O(n²) array concatenation.
+     * Returns a cold [Flow] that emits received packets as (type, payload) pairs.
+     *
+     * Reassembly strategy (A-C1): incoming bytes are appended to a single growable
+     * buffer and parsed via a moving [parseOffset]. We do **not** copy the whole
+     * accumulator on every read (which was O(n²) for large frames); instead we only
+     * compact — dropping already-consumed bytes — once at least one full packet has
+     * been consumed from the front. Partial reads accumulate until a complete frame
+     * is available, so multi-frame reassembly across tiny chunks and single large
+     * frames both parse correctly.
+     *
+     * On a framing error the flow terminates by throwing [PacketFramingException]
+     * (a typed failure, A-H3) rather than a raw [RuntimeException]; the caller closes
+     * the socket and triggers reconnect.
      */
-    fun receivePackets(): Flow<Pair<Byte, ByteArray>> = flow {
+    fun receivePackets(): Flow<Pair<Byte, ByteArray>> {
         val input = socket?.getInputStream() ?: throw IllegalStateException("Not connected")
-        val readBuffer = ByteArray(ProtocolConstants.SOCKET_BUFFER_SIZE)
-        val accumulator = ByteArrayOutputStream(ProtocolConstants.SOCKET_BUFFER_SIZE)
+        return framedPackets(input).flowOn(Dispatchers.IO)
+    }
 
-        while (currentCoroutineContext()[kotlinx.coroutines.Job]?.isActive != false) {
+    /**
+     * Frames packets out of an arbitrary [InputStream]. Extracted from
+     * [receivePackets] so the reassembly logic can be unit-tested with a mock
+     * stream that delivers bytes in tiny chunks. Not intended for external use.
+     */
+    internal fun framedPackets(input: java.io.InputStream): Flow<Pair<Byte, ByteArray>> = flow {
+        val readBuffer = ByteArray(READ_CHUNK_SIZE)
+
+        // Growable accumulation buffer. `size` is the count of valid bytes;
+        // `parseOffset` is how far we have consumed from the front.
+        var buffer = ByteArray(INITIAL_BUFFER_CAPACITY)
+        var size = 0
+        var parseOffset = 0
+
+        while (currentCoroutineContext().isActive) {
             val bytesRead = input.read(readBuffer)
             if (bytesRead == -1) break
 
-            accumulator.write(readBuffer, 0, bytesRead)
+            // Ensure capacity for the freshly read bytes, compacting first if that
+            // is enough to make room (avoids unbounded growth for streaming frames).
+            if (size + bytesRead > buffer.size) {
+                if (parseOffset > 0) {
+                    System.arraycopy(buffer, parseOffset, buffer, 0, size - parseOffset)
+                    size -= parseOffset
+                    parseOffset = 0
+                }
+                if (size + bytesRead > buffer.size) {
+                    var newCapacity = buffer.size
+                    while (newCapacity < size + bytesRead) newCapacity *= 2
+                    buffer = buffer.copyOf(newCapacity)
+                }
+            }
+            System.arraycopy(readBuffer, 0, buffer, size, bytesRead)
+            size += bytesRead
 
-            val data = accumulator.toByteArray()
-            var offset = 0
-
-            while (offset < data.size) {
-                when (val result = PacketFramer.unframe(data, offset, data.size - offset)) {
+            // Drain as many complete packets as are currently buffered.
+            var parsing = true
+            while (parsing) {
+                when (val result = PacketFramer.unframe(buffer, parseOffset, size - parseOffset)) {
                     is PacketFramer.UnframeResult.Success -> {
                         emit(Pair(result.type, result.payload))
-                        offset += result.consumed
+                        parseOffset += result.consumed
                     }
-                    is PacketFramer.UnframeResult.NeedMoreData -> break
+
+                    is PacketFramer.UnframeResult.NeedMoreData -> parsing = false
+
                     is PacketFramer.UnframeResult.Error -> {
-                        throw RuntimeException("Packet error: ${result.message}")
+                        // Typed, cooperative failure: close cleanly and let the
+                        // connection manager decide to reconnect.
+                        throw PacketFramingException("Packet framing error: ${result.message}")
                     }
                 }
             }
 
-            // Keep only unconsumed data
-            accumulator.reset()
-            if (offset < data.size) {
-                accumulator.write(data, offset, data.size - offset)
+            // Compact once a full packet was consumed so unconsumed bytes move to
+            // the front. This is the ONLY place we shift data, and only after real
+            // progress — never a per-read full copy.
+            if (parseOffset > 0) {
+                if (parseOffset == size) {
+                    // Everything consumed — cheap reset, no copy.
+                    size = 0
+                    parseOffset = 0
+                } else if (parseOffset >= COMPACT_THRESHOLD) {
+                    System.arraycopy(buffer, parseOffset, buffer, 0, size - parseOffset)
+                    size -= parseOffset
+                    parseOffset = 0
+                }
             }
         }
-    }.flowOn(Dispatchers.IO)
+    }
 
     suspend fun disconnect() = withContext(Dispatchers.IO) {
         try {
             outputStream?.close()
+        } catch (_: Exception) {
+        }
+        try {
             socket?.close()
-        } catch (_: Exception) {}
+        } catch (_: Exception) {
+        }
         outputStream = null
         socket = null
     }
-}
 
-private suspend fun currentCoroutineContext() = kotlin.coroutines.coroutineContext
+    private companion object {
+        const val READ_CHUNK_SIZE = 64 * 1024
+        const val INITIAL_BUFFER_CAPACITY = 64 * 1024
+
+        /** Only pay the compaction memmove once the consumed prefix is sizeable. */
+        const val COMPACT_THRESHOLD = 32 * 1024
+    }
+}

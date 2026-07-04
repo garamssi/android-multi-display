@@ -15,9 +15,12 @@ object ProtocolConstants {
     const val HANDSHAKE_TIMEOUT = 5_000L
     const val PING_INTERVAL = 1_000L
     const val PING_TIMEOUT = 3_000L
+    // Live reconnect after a lost session. Over USB a drop is usually terminal
+    // (cable pulled, Mac stopped) or a brief hiccup, so retries use a short fixed
+    // interval and a low attempt cap: ~5s total before giving up and returning to
+    // the Connect screen, rather than a long exponential backoff.
     const val RECONNECT_DELAY = 1_000L
-    const val RECONNECT_MAX_DELAY = 30_000L
-    const val RECONNECT_MAX_ATTEMPTS = 10
+    const val RECONNECT_MAX_ATTEMPTS = 5
     const val STREAM_START_TIMEOUT = 3_000L
 
     // Socket buffer
