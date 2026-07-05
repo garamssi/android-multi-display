@@ -1,32 +1,39 @@
 package com.desklink.android.presentation.theme
 
-import android.os.Build
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.dynamicDarkColorScheme
-import androidx.compose.material3.dynamicLightColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.runtime.SideEffect
+import androidx.compose.ui.platform.LocalView
+import androidx.core.view.WindowCompat
 
+/**
+ * DeskLink's app theme: a FIXED dark "pro tool" (Linear/Raycast direction) theme.
+ *
+ * There is intentionally no light variant and no Material You / dynamic color — the
+ * hi-fi handoff specifies exact dark tokens. IBM Plex Sans/Mono typography is applied
+ * globally; the color scheme is mapped from [DeskLinkTokens] (see [DeskLinkDarkColorScheme]).
+ */
 @Composable
 fun DeskLinkTheme(
-    darkTheme: Boolean = isSystemInDarkTheme(),
     content: @Composable () -> Unit,
 ) {
-    val colorScheme = when {
-        Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
-            val context = LocalContext.current
-            if (darkTheme) dynamicDarkColorScheme(context)
-            else dynamicLightColorScheme(context)
+    val view = LocalView.current
+    if (!view.isInEditMode) {
+        SideEffect {
+            val window = (view.context as? android.app.Activity)?.window ?: return@SideEffect
+            // Keep the transparent, edge-to-edge system bars set up by enableEdgeToEdge()
+            // and the platform theme; only force LIGHT bar icons so they stay legible
+            // over the permanently-dark background regardless of the device's day/night
+            // setting.
+            val controller = WindowCompat.getInsetsController(window, view)
+            controller.isAppearanceLightStatusBars = false
+            controller.isAppearanceLightNavigationBars = false
         }
-        darkTheme -> darkColorScheme()
-        else -> lightColorScheme()
     }
 
     MaterialTheme(
-        colorScheme = colorScheme,
+        colorScheme = DeskLinkDarkColorScheme,
+        typography = DeskLinkTypography,
         content = content,
     )
 }

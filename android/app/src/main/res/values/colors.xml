@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- App base background (DeskLink token "App base bg"). Used as the window
+         background so there is no light flash before Compose draws. -->
+    <color name="desklink_bg">#FF0A0C10</color>
+</resources>

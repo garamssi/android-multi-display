@@ -26,6 +26,13 @@ fun DeskLinkNavHost() {
                         popUpTo(Route.CONNECTION) { inclusive = true }
                     }
                 },
+                onOpenSettings = {
+                    // Leave the display (already torn down by the caller) and open
+                    // Settings on top of the Connection screen, so Back returns there.
+                    navController.navigate(Route.SETTINGS) {
+                        popUpTo(Route.CONNECTION) { inclusive = false }
+                    }
+                },
             )
         }
         composable(Route.SETTINGS) {

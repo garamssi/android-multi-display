@@ -1,4 +1,24 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.DeskLink" parent="android:Theme.Material.Light.NoActionBar" />
+    <!--
+      Platform shell theme for the DeskLink tablet client.
+
+      The visual system (colors, typography, spacing) is driven entirely by Jetpack
+      Compose's MaterialTheme (see DeskLinkTheme.kt), which is a FIXED dark "pro tool"
+      theme with no dynamic color. This platform theme therefore only needs to be a
+      no-action-bar, always-dark shell with a dark window background (so there is no
+      light flash before Compose composes) and transparent, edge-to-edge system bars.
+
+      Base uses android:Theme.Material.NoActionBar (a dark Material base) for minSdk 28
+      compatibility; values-v29 adds contrast-enforcement opt-outs so the transparent
+      bars stay fully transparent under enableEdgeToEdge().
+    -->
+    <style name="Theme.DeskLink" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowActionBar">false</item>
+        <item name="android:windowBackground">@color/desklink_bg</item>
+        <item name="android:windowDrawsSystemBarBackgrounds">true</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
 </resources>
