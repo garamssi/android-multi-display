@@ -75,6 +75,75 @@ final class TouchDeserializerTests: XCTestCase {
         XCTAssertEqual(events[1].action, .move)
     }
 
+    // MARK: - Golden vector (S-C1)
+
+    /// The authoritative TOUCH_EVENT golden vector.
+    /// MOVE(0x02), x=0.5, y=0.25, pressure=32768, pointerId=1, ts=1234567890123456us
+    /// → 023F0000003E800000800001000462D53C8ABAC0
+    private static let goldenTouchHex = "023F0000003E800000800001000462D53C8ABAC0"
+
+    private static var goldenTouchEvent: TouchEvent {
+        TouchEvent(
+            action: .move,
+            x: 0.5,
+            y: 0.25,
+            pressure: 32768,
+            pointerId: 1,
+            timestampUs: 1_234_567_890_123_456
+        )
+    }
+
+    func testSerializeMatchesGoldenVector() {
+        let data = TouchSerializer.serialize(Self.goldenTouchEvent)
+        XCTAssertEqual(data.count, TouchEvent.serializedSize)
+        XCTAssertEqual(data.hexString, Self.goldenTouchHex)
+    }
+
+    func testDeserializeGoldenVector() {
+        let data = Data(hex: Self.goldenTouchHex)
+        let event = TouchDeserializer.deserialize(data: data)
+        XCTAssertEqual(event, Self.goldenTouchEvent)
+        XCTAssertEqual(event?.action, .move)
+        XCTAssertEqual(event?.x ?? 0, 0.5, accuracy: 0.0001)
+        XCTAssertEqual(event?.y ?? 0, 0.25, accuracy: 0.0001)
+        XCTAssertEqual(event?.pressure, 32768)
+        XCTAssertEqual(event?.pointerId, 1)
+        XCTAssertEqual(event?.timestampUs, 1_234_567_890_123_456)
+    }
+
+    func testGoldenVectorRoundTrip() {
+        let serialized = TouchSerializer.serialize(Self.goldenTouchEvent)
+        let parsed = TouchDeserializer.deserialize(data: serialized)
+        XCTAssertEqual(parsed, Self.goldenTouchEvent)
+    }
+
+    /// Proves `loadUnaligned` correctness: the Int64 timestamp lives at offset 12
+    /// (not an 8-byte-aligned address). Parsing the golden vector at a deliberately
+    /// misaligned base (prefixed with an odd number of bytes then sliced) must still
+    /// yield exactly the right values.
+    func testDeserializeFromMisalignedBuffer() {
+        let golden = Data(hex: Self.goldenTouchHex)
+        let prefixed = Data([0xDE, 0xAD, 0xBE]) + golden // 3-byte odd prefix
+        let sliced = prefixed.subdata(in: 3..<prefixed.count)
+        let event = TouchDeserializer.deserialize(data: sliced)
+        XCTAssertEqual(event, Self.goldenTouchEvent)
+    }
+
+    /// A batch of three golden-vector events parses correctly (loadUnaligned across
+    /// multiple 20-byte records at offsets 2, 22, 42 — all misaligned).
+    func testDeserializeBatchOfGoldenVectors() {
+        let events = [Self.goldenTouchEvent, Self.goldenTouchEvent, Self.goldenTouchEvent]
+        let batch = TouchSerializer.serializeBatch(events)
+        // Count(2) + 3 × 20 = 62 bytes
+        XCTAssertEqual(batch.count, 2 + 3 * TouchEvent.serializedSize)
+
+        let parsed = TouchDeserializer.deserializeBatch(data: batch)
+        XCTAssertEqual(parsed.count, 3)
+        for event in parsed {
+            XCTAssertEqual(event, Self.goldenTouchEvent)
+        }
+    }
+
     // MARK: - Helpers
 
     private func createSerializedEvent(action: UInt8, x: Float, y: Float) -> Data {

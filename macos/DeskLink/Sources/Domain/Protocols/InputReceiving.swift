@@ -4,4 +4,6 @@ public protocol InputReceiving: Sendable {
     func startReceiving(port: UInt16) -> AsyncThrowingStream<TouchEvent, Error>
     func stopReceiving() async
     func injectEvent(_ event: TouchEvent, displayID: UInt32) async throws
+    func injectScroll(_ scroll: ScrollEvent, displayID: UInt32) async throws
+    func injectPointerButton(_ event: PointerButtonEvent, displayID: UInt32) async throws
 }

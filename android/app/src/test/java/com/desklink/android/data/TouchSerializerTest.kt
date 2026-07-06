@@ -60,6 +60,47 @@ class TouchSerializerTest {
         }
     }
 
+    // ---- Golden vector (authoritative wire bytes) ----
+
+    @Test
+    fun `serialize matches golden vector`() {
+        // MOVE(0x02), x=0.5, y=0.25, pressure=32768, pointerId=1, ts=1234567890123456us
+        val event = TouchEvent(
+            action = TouchEvent.Action.MOVE,
+            x = 0.5f,
+            y = 0.25f,
+            pressure = 32768u.toUShort(),
+            pointerId = 1u.toUByte(),
+            timestampUs = 1234567890123456L,
+        )
+        val hex = TouchSerializer.serialize(event).toHex()
+        assertEquals("023F0000003E800000800001000462D53C8ABAC0", hex)
+    }
+
+    @Test
+    fun `framed touch event matches golden vector`() {
+        val event = TouchEvent(
+            action = TouchEvent.Action.MOVE,
+            x = 0.5f,
+            y = 0.25f,
+            pressure = 32768u.toUShort(),
+            pointerId = 1u.toUByte(),
+            timestampUs = 1234567890123456L,
+        )
+        val framed = com.desklink.android.data.network.PacketFramer.frame(
+            com.desklink.android.domain.model.MessageType.TOUCH_EVENT,
+            TouchSerializer.serialize(event),
+        )
+        // 0000001520 + the 20 payload bytes
+        assertEquals(
+            "0000001520023F0000003E800000800001000462D53C8ABAC0",
+            framed.toHex(),
+        )
+    }
+
+    private fun ByteArray.toHex(): String =
+        joinToString("") { "%02X".format(it) }
+
     private fun createTestEvent() = TouchEvent(
         action = TouchEvent.Action.MOVE,
         x = 0.5f,
