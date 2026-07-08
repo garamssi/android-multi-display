@@ -1,63 +1,126 @@
 package com.desklink.android.presentation.settings
 
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import com.desklink.android.data.settings.SettingsRepository
 import com.desklink.android.domain.model.DisplayConfig
 import dagger.hilt.android.lifecycle.HiltViewModel
-import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.stateIn
 import javax.inject.Inject
 
+/**
+ * Settings screen ViewModel. Reads/writes the shared [SettingsRepository] so a
+ * selection persists across navigation and can be consumed by the connect flow
+ * (A-L4). The UI state's initial defaults come from the repository's native-derived
+ * config, keeping one consistent default resolution/bitrate across the app.
+ */
 @HiltViewModel
-class SettingsViewModel @Inject constructor() : ViewModel() {
+class SettingsViewModel @Inject constructor(
+    private val settingsRepository: SettingsRepository,
+) : ViewModel() {
 
-    private val _uiState = MutableStateFlow(SettingsUiState())
-    val uiState: StateFlow<SettingsUiState> = _uiState.asStateFlow()
-
-    fun setResolution(width: Int, height: Int) {
-        _uiState.update { it.copy(width = width, height = height) }
-    }
-
-    fun setFps(fps: Int) {
-        _uiState.update { it.copy(fps = fps) }
-    }
-
-    fun setBitrate(bitrateKbps: Int) {
-        _uiState.update { it.copy(bitrateKbps = bitrateKbps) }
-    }
-
-    fun setCodec(codec: DisplayConfig.Codec) {
-        _uiState.update { it.copy(codec = codec) }
-    }
-
-    fun toDisplayConfig(): DisplayConfig {
-        val state = _uiState.value
-        return DisplayConfig(
-            width = state.width,
-            height = state.height,
-            fps = state.fps,
-            codec = state.codec,
-            bitrateKbps = state.bitrateKbps,
+    val uiState: StateFlow<SettingsUiState> =
+        combine(
+            settingsRepository.config,
+            settingsRepository.scrollSensitivity,
+            settingsRepository.naturalScroll,
+        ) { config, sensitivity, naturalScroll ->
+            config.toUiState(sensitivity, naturalScroll)
+        }.stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = settingsRepository.current().toUiState(
+                settingsRepository.currentScrollSensitivity(),
+                settingsRepository.currentNaturalScroll(),
+            ),
         )
-    }
+
+    fun setResolution(width: Int, height: Int) = settingsRepository.setResolution(width, height)
+
+    /** Reset the streaming resolution to the device's real native size. */
+    fun useNativeResolution() =
+        settingsRepository.setResolution(settingsRepository.nativeWidth, settingsRepository.nativeHeight)
+
+    fun setFps(fps: Int) = settingsRepository.setFps(fps)
+
+    fun setBitrate(bitrateKbps: Int) = settingsRepository.setBitrate(bitrateKbps)
+
+    fun setCodec(codec: DisplayConfig.Codec) = settingsRepository.setCodec(codec)
+
+    fun setScrollSensitivity(value: Float) = settingsRepository.setScrollSensitivity(value)
+
+    fun setNaturalScroll(enabled: Boolean) = settingsRepository.setNaturalScroll(enabled)
+
+    /** The current user selection as a [DisplayConfig] (used by the connect flow). */
+    fun toDisplayConfig(): DisplayConfig = settingsRepository.current()
+
+    private fun DisplayConfig.toUiState(scrollSensitivity: Float, naturalScroll: Boolean) = SettingsUiState(
+        width = width,
+        height = height,
+        fps = fps,
+        bitrateKbps = bitrateKbps,
+        codec = codec,
+        nativeWidth = nativeWidth,
+        nativeHeight = nativeHeight,
+        scrollSensitivity = scrollSensitivity,
+        naturalScroll = naturalScroll,
+    )
 }
 
 data class SettingsUiState(
-    val width: Int = 2560,
-    val height: Int = 1600,
-    val fps: Int = 60,
-    val bitrateKbps: Int = 20_000,
-    val codec: DisplayConfig.Codec = DisplayConfig.Codec.HEVC,
+    val width: Int = DisplayConfig().width,
+    val height: Int = DisplayConfig().height,
+    val fps: Int = DisplayConfig().fps,
+    val bitrateKbps: Int = DisplayConfig().bitrateKbps,
+    val codec: DisplayConfig.Codec = DisplayConfig().codec,
+    val nativeWidth: Int = DisplayConfig().nativeWidth,
+    val nativeHeight: Int = DisplayConfig().nativeHeight,
+    val scrollSensitivity: Float = 3.0f,
+    val naturalScroll: Boolean = true,
 ) {
+    /** True when the current streaming resolution equals the device's native size. */
+    val isNativeSelected: Boolean get() = width == nativeWidth && height == nativeHeight
+
     companion object {
+        /** Fixed resolution presets shown below the dynamic "Native" option. */
         val RESOLUTION_PRESETS = listOf(
             2560 to 1600,
             1920 to 1200,
-            1920 to 1080,
             1280 to 800,
         )
         val FPS_OPTIONS = listOf(30, 60, 120)
-        val BITRATE_OPTIONS = listOf(5_000, 10_000, 15_000, 20_000, 30_000, 40_000)
+
+        /** Bitrate presets: Low / Medium / High (10 / 20 / 40 Mbps). */
+        val BITRATE_OPTIONS = listOf(
+            BitrateOption(10_000, "Low"),
+            BitrateOption(20_000, "Medium"),
+            BitrateOption(40_000, "High"),
+        )
+
+        /** Scroll speed presets (sensitivity multiplier applied on the tablet). */
+        val SCROLL_SPEED_OPTIONS = listOf(
+            ScrollSpeedOption(1.5f, "Slow"),
+            ScrollSpeedOption(3.0f, "Normal"),
+            ScrollSpeedOption(5.0f, "Fast"),
+        )
+
+        /** Scroll direction options. Natural = content follows the fingers (macOS
+         *  default); Reversed inverts it. Applied on the tablet before sending. */
+        val SCROLL_DIRECTION_OPTIONS = listOf(
+            ScrollDirectionOption(natural = true, label = "Natural"),
+            ScrollDirectionOption(natural = false, label = "Reversed"),
+        )
     }
 }
+
+/** A selectable bitrate preset with a human label. */
+data class BitrateOption(val kbps: Int, val label: String)
+
+/** A selectable scroll-speed preset (sensitivity multiplier) with a human label. */
+data class ScrollSpeedOption(val sensitivity: Float, val label: String)
+
+/** A selectable scroll-direction preset with a human label. */
+data class ScrollDirectionOption(val natural: Boolean, val label: String)

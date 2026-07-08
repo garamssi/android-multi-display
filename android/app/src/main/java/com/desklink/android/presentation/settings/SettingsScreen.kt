@@ -1,6 +1,11 @@
 package com.desklink.android.presentation.settings
 
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -8,28 +13,52 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material.icons.outlined.Check
+import androidx.compose.material.icons.outlined.ChevronLeft
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.RadioButton
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.desklink.android.domain.model.DisplayConfig
+import com.desklink.android.presentation.components.GhostTextButton
+import com.desklink.android.presentation.components.MonoText
+import com.desklink.android.presentation.components.ResolutionRadioCard
+import com.desklink.android.presentation.components.SegmentedControl
+import com.desklink.android.presentation.components.StatusDot
+import com.desklink.android.presentation.theme.DeskLinkTokens
+import com.desklink.android.presentation.theme.PlexSans
 
-@OptIn(ExperimentalMaterial3Api::class)
+/** A resolution option shown as a radio card (dynamic list, derived from native). */
+private data class ResolutionOption(
+    val name: String,
+    val width: Int,
+    val height: Int,
+    val isNative: Boolean,
+)
+
+/** Friendly names for the standard presets. */
+private fun presetName(width: Int, height: Int): String = when {
+    width >= 2560 -> "QHD"
+    width >= 1920 -> "FHD+"
+    else -> "HD"
+}
+
 @Composable
 fun SettingsScreen(
     onBack: () -> Unit,
@@ -37,98 +66,400 @@ fun SettingsScreen(
 ) {
     val state by viewModel.uiState.collectAsState()
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Settings") },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                    }
-                },
-            )
-        },
-    ) { padding ->
+    // Resolution options are DERIVED from the detected native panel size: "Native"
+    // first, then standard presets that are <= native (capped at native), with any
+    // preset equal to native folded into the Native card.
+    val resolutionOptions = buildList {
+        add(ResolutionOption("Native", state.nativeWidth, state.nativeHeight, isNative = true))
+        SettingsUiState.RESOLUTION_PRESETS
+            .filter { (w, h) -> w <= state.nativeWidth && h <= state.nativeHeight }
+            .filterNot { (w, h) -> w == state.nativeWidth && h == state.nativeHeight }
+            .forEach { (w, h) -> add(ResolutionOption(presetName(w, h), w, h, isNative = false)) }
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(DeskLinkTokens.AppBg),
+    ) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(padding)
-                .padding(horizontal = 16.dp)
-                .verticalScroll(rememberScrollState()),
+                .statusBarsPadding(),
         ) {
-            // Resolution
-            SectionTitle("Resolution")
-            SettingsUiState.RESOLUTION_PRESETS.forEach { (w, h) ->
-                RadioRow(
-                    label = "${w}x${h}",
-                    selected = state.width == w && state.height == h,
-                    onClick = { viewModel.setResolution(w, h) },
-                )
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // FPS
-            SectionTitle("Frame Rate")
-            SettingsUiState.FPS_OPTIONS.forEach { fps ->
-                RadioRow(
-                    label = "${fps} fps",
-                    selected = state.fps == fps,
-                    onClick = { viewModel.setFps(fps) },
-                )
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // Bitrate
-            SectionTitle("Bitrate")
-            SettingsUiState.BITRATE_OPTIONS.forEach { bitrate ->
-                RadioRow(
-                    label = "${bitrate / 1000} Mbps",
-                    selected = state.bitrateKbps == bitrate,
-                    onClick = { viewModel.setBitrate(bitrate) },
-                )
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // Codec
-            SectionTitle("Codec")
-            RadioRow(
-                label = "H.265 (HEVC)",
-                selected = state.codec == DisplayConfig.Codec.HEVC,
-                onClick = { viewModel.setCodec(DisplayConfig.Codec.HEVC) },
+            SettingsHeader(
+                onBack = onBack,
+                onReset = {
+                    // Restore the repository's native-derived defaults using only the
+                    // existing setters (keeps the ViewModel/option→config mapping intact).
+                    viewModel.useNativeResolution()
+                    viewModel.setFps(60)
+                    viewModel.setCodec(DisplayConfig.Codec.HEVC)
+                    viewModel.setBitrate(DisplayConfig.recommendedBitrateKbps(state.nativeWidth))
+                },
             )
-            RadioRow(
-                label = "H.264 (AVC)",
-                selected = state.codec == DisplayConfig.Codec.H264,
-                onClick = { viewModel.setCodec(DisplayConfig.Codec.H264) },
+            // Header bottom divider (spec: 1px rgba(255,255,255,.06)).
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(1.dp)
+                    .background(DeskLinkTokens.Border06),
             )
 
-            Spacer(modifier = Modifier.height(32.dp))
+            // Adaptive body: two columns on wide tablets, stacked on narrow ones. The
+            // whole body scrolls so it holds across any aspect ratio.
+            androidx.compose.foundation.layout.BoxWithConstraints(
+                modifier = Modifier.fillMaxSize(),
+            ) {
+                val wide = maxWidth >= 720.dp
+                val scroll = rememberScrollState()
+                if (wide) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .verticalScroll(scroll)
+                            .padding(horizontal = 34.dp, vertical = 30.dp),
+                        horizontalArrangement = Arrangement.spacedBy(36.dp),
+                    ) {
+                        ResolutionColumn(
+                            modifier = Modifier.weight(1f),
+                            options = resolutionOptions,
+                            selectedWidth = state.width,
+                            selectedHeight = state.height,
+                            isNativeSelected = state.isNativeSelected,
+                            onSelectNative = viewModel::useNativeResolution,
+                            onSelectPreset = viewModel::setResolution,
+                        )
+                        StreamColumn(
+                            modifier = Modifier.weight(1f),
+                            state = state,
+                            onSetFps = viewModel::setFps,
+                            onSetBitrate = viewModel::setBitrate,
+                            onSetCodec = viewModel::setCodec,
+                            onSetScrollSensitivity = viewModel::setScrollSensitivity,
+                            onSetNaturalScroll = viewModel::setNaturalScroll,
+                        )
+                    }
+                } else {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .verticalScroll(scroll)
+                            .padding(horizontal = 24.dp, vertical = 26.dp),
+                        verticalArrangement = Arrangement.spacedBy(30.dp),
+                    ) {
+                        ResolutionColumn(
+                            options = resolutionOptions,
+                            selectedWidth = state.width,
+                            selectedHeight = state.height,
+                            isNativeSelected = state.isNativeSelected,
+                            onSelectNative = viewModel::useNativeResolution,
+                            onSelectPreset = viewModel::setResolution,
+                        )
+                        StreamColumn(
+                            state = state,
+                            onSetFps = viewModel::setFps,
+                            onSetBitrate = viewModel::setBitrate,
+                            onSetCodec = viewModel::setCodec,
+                            onSetScrollSensitivity = viewModel::setScrollSensitivity,
+                            onSetNaturalScroll = viewModel::setNaturalScroll,
+                        )
+                    }
+                }
+            }
         }
     }
 }
 
 @Composable
-private fun SectionTitle(text: String) {
-    Text(
-        text = text,
-        style = MaterialTheme.typography.titleMedium,
-        modifier = Modifier.padding(vertical = 8.dp),
-    )
-}
-
-@Composable
-private fun RadioRow(label: String, selected: Boolean, onClick: () -> Unit) {
+private fun SettingsHeader(onBack: () -> Unit, onReset: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(vertical = 4.dp),
+            .height(66.dp)
+            .padding(horizontal = 34.dp),
         verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        RadioButton(selected = selected, onClick = onClick)
-        Text(text = label, modifier = Modifier.padding(start = 8.dp))
+        val squareShape = RoundedCornerShape(DeskLinkTokens.RadiusSquareButton)
+        Box(
+            modifier = Modifier
+                .size(40.dp)
+                .clip(squareShape)
+                .background(color = DeskLinkTokens.Surface04, shape = squareShape)
+                .border(BorderStroke(1.dp, DeskLinkTokens.Border10), squareShape)
+                .clickable(onClick = onBack),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = Icons.Outlined.ChevronLeft,
+                contentDescription = "Back",
+                tint = DeskLinkTokens.TextPrimary,
+                modifier = Modifier.size(22.dp),
+            )
+        }
+        Text(
+            text = "Settings",
+            color = DeskLinkTokens.TextPrimary,
+            fontFamily = PlexSans,
+            fontSize = 22.sp,
+            fontWeight = FontWeight.W600,
+        )
+        Spacer(Modifier.weight(1f))
+        GhostTextButton(
+            text = "Reset to defaults",
+            onClick = onReset,
+            fontSize = 14.sp,
+        )
     }
+}
+
+@Composable
+private fun ResolutionColumn(
+    modifier: Modifier = Modifier,
+    options: List<ResolutionOption>,
+    selectedWidth: Int,
+    selectedHeight: Int,
+    isNativeSelected: Boolean,
+    onSelectNative: () -> Unit,
+    onSelectPreset: (Int, Int) -> Unit,
+) {
+    Column(modifier = modifier) {
+        SectionLabel("Resolution")
+        Spacer(Modifier.height(14.dp))
+        // 2-column grid of radio cards.
+        options.chunked(2).forEach { rowItems ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(11.dp),
+            ) {
+                rowItems.forEach { opt ->
+                    val selected = if (opt.isNative) {
+                        isNativeSelected
+                    } else {
+                        !isNativeSelected && selectedWidth == opt.width && selectedHeight == opt.height
+                    }
+                    ResolutionRadioCard(
+                        name = opt.name,
+                        value = "${opt.width} × ${opt.height}",
+                        selected = selected,
+                        onClick = {
+                            if (opt.isNative) onSelectNative() else onSelectPreset(opt.width, opt.height)
+                        },
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                // Balance a trailing odd card so widths stay equal.
+                if (rowItems.size == 1) Spacer(Modifier.weight(1f))
+            }
+            Spacer(Modifier.height(11.dp))
+        }
+        InfoNote(
+            text = "Options adapt to the connected tablet — DeskLink detects the panel's " +
+                "native resolution and offers matching presets automatically.",
+        )
+    }
+}
+
+@Composable
+private fun StreamColumn(
+    modifier: Modifier = Modifier,
+    state: SettingsUiState,
+    onSetFps: (Int) -> Unit,
+    onSetBitrate: (Int) -> Unit,
+    onSetCodec: (DisplayConfig.Codec) -> Unit,
+    onSetScrollSensitivity: (Float) -> Unit,
+    onSetNaturalScroll: (Boolean) -> Unit,
+) {
+    Column(
+        modifier = modifier,
+        verticalArrangement = Arrangement.spacedBy(26.dp),
+    ) {
+        // Frame rate.
+        Column {
+            SectionLabel("Frame rate")
+            Spacer(Modifier.height(14.dp))
+            SegmentedControl(
+                options = SettingsUiState.FPS_OPTIONS,
+                selected = state.fps,
+                onSelect = onSetFps,
+            ) { fps, isSelected ->
+                SegmentLabel(text = "$fps fps", isSelected = isSelected)
+            }
+        }
+
+        // Bitrate (58dp, two-line).
+        Column {
+            SectionLabel("Bitrate")
+            Spacer(Modifier.height(14.dp))
+            SegmentedControl(
+                options = SettingsUiState.BITRATE_OPTIONS,
+                selected = SettingsUiState.BITRATE_OPTIONS.firstOrNull { it.kbps == state.bitrateKbps }
+                    ?: SettingsUiState.BITRATE_OPTIONS.last(),
+                onSelect = { onSetBitrate(it.kbps) },
+                itemHeight = 58.dp,
+            ) { option, isSelected ->
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    Text(
+                        text = option.label,
+                        color = if (isSelected) Color.White else DeskLinkTokens.TextSecondary,
+                        fontFamily = PlexSans,
+                        fontSize = 14.5.sp,
+                        fontWeight = if (isSelected) FontWeight.W600 else FontWeight.W500,
+                    )
+                    MonoText(
+                        text = "${option.kbps / 1000} Mbps",
+                        color = if (isSelected) Color.White.copy(alpha = 0.8f) else DeskLinkTokens.TextQuaternary,
+                        fontSize = 11.5.sp,
+                    )
+                }
+            }
+        }
+
+        // Codec.
+        Column {
+            SectionLabel("Codec")
+            Spacer(Modifier.height(14.dp))
+            SegmentedControl(
+                options = listOf(DisplayConfig.Codec.HEVC, DisplayConfig.Codec.H264),
+                selected = state.codec,
+                onSelect = onSetCodec,
+            ) { codec, isSelected ->
+                val label = if (codec == DisplayConfig.Codec.HEVC) "H.265 · HEVC" else "H.264 · AVC"
+                SegmentLabel(text = label, isSelected = isSelected)
+            }
+        }
+
+        // Scroll speed (input preference: multiplier applied to two-finger scroll).
+        Column {
+            SectionLabel("Scroll speed")
+            Spacer(Modifier.height(14.dp))
+            SegmentedControl(
+                options = SettingsUiState.SCROLL_SPEED_OPTIONS,
+                // A persisted value is always one of the presets; fall back to the
+                // default-sensitivity preset rather than a bare index if it ever isn't.
+                selected = SettingsUiState.SCROLL_SPEED_OPTIONS
+                    .firstOrNull { it.sensitivity == state.scrollSensitivity }
+                    ?: SettingsUiState.SCROLL_SPEED_OPTIONS
+                        .first { it.sensitivity == SettingsUiState().scrollSensitivity },
+                onSelect = { onSetScrollSensitivity(it.sensitivity) },
+            ) { option, isSelected ->
+                SegmentLabel(text = option.label, isSelected = isSelected)
+            }
+        }
+
+        // Scroll direction (Natural follows the fingers; Reversed inverts it).
+        Column {
+            SectionLabel("Scroll direction")
+            Spacer(Modifier.height(14.dp))
+            SegmentedControl(
+                options = SettingsUiState.SCROLL_DIRECTION_OPTIONS,
+                selected = SettingsUiState.SCROLL_DIRECTION_OPTIONS
+                    .first { it.natural == state.naturalScroll },
+                onSelect = { onSetNaturalScroll(it.natural) },
+            ) { option, isSelected ->
+                SegmentLabel(text = option.label, isSelected = isSelected)
+            }
+        }
+
+        // Estimated-stream summary chip (green-tinted).
+        SummaryChip(state = state)
+    }
+}
+
+/** Single-line segment interior with a leading check when selected. */
+@Composable
+private fun SegmentLabel(text: String, isSelected: Boolean) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(7.dp),
+    ) {
+        if (isSelected) {
+            Icon(
+                imageVector = Icons.Outlined.Check,
+                contentDescription = null,
+                tint = Color.White,
+                modifier = Modifier.size(14.dp),
+            )
+        }
+        Text(
+            text = text,
+            color = if (isSelected) Color.White else DeskLinkTokens.TextSecondary,
+            fontFamily = PlexSans,
+            fontSize = 14.5.sp,
+            fontWeight = if (isSelected) FontWeight.W600 else FontWeight.W500,
+        )
+    }
+}
+
+@Composable
+private fun SummaryChip(state: SettingsUiState) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(DeskLinkTokens.ShapeCard)
+            .background(color = DeskLinkTokens.SuccessChipBg, shape = DeskLinkTokens.ShapeCard)
+            .border(BorderStroke(1.dp, DeskLinkTokens.SuccessChipBorder), DeskLinkTokens.ShapeCard)
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(11.dp),
+    ) {
+        StatusDot(color = DeskLinkTokens.Success, size = 8.dp)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = "Estimated stream — ",
+                color = DeskLinkTokens.TextBody,
+                fontFamily = PlexSans,
+                fontSize = 13.5.sp,
+            )
+            MonoText(
+                text = "${state.width}×${state.height} · ${state.fps}fps · ${state.bitrateKbps / 1000}Mbps",
+                color = DeskLinkTokens.TextPrimary,
+                fontSize = 13.5.sp,
+            )
+        }
+    }
+}
+
+@Composable
+private fun InfoNote(text: String) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(DeskLinkTokens.ShapeChip)
+            .background(color = DeskLinkTokens.Surface03, shape = DeskLinkTokens.ShapeChip)
+            .border(BorderStroke(1.dp, DeskLinkTokens.Border06), DeskLinkTokens.ShapeChip)
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(9.dp),
+    ) {
+        Icon(
+            imageVector = Icons.Outlined.Info,
+            contentDescription = null,
+            tint = DeskLinkTokens.AccentLight,
+            modifier = Modifier
+                .size(16.dp)
+                .padding(top = 1.dp),
+        )
+        Text(
+            text = text,
+            color = DeskLinkTokens.TextSecondary,
+            fontFamily = PlexSans,
+            fontSize = 12.5.sp,
+        )
+    }
+}
+
+@Composable
+private fun SectionLabel(text: String) {
+    MonoText(
+        text = text,
+        color = DeskLinkTokens.TextQuaternary,
+        fontSize = 11.5.sp,
+        fontWeight = FontWeight.W500,
+        letterSpacingEm = 0.16f,
+        uppercase = true,
+    )
 }
