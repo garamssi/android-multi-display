@@ -30,5 +30,10 @@
     <true/>
     <key>NSHumanReadableCopyright</key>
     <string>DeskLink</string>
+    <!-- Shown if macOS prompts for Local Network access when Wi-Fi (LAN) connections
+         are enabled and a tablet on the same network connects. USB (adb reverse over
+         loopback) does not require this. -->
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>DeskLink uses your local network to connect to your tablet over Wi-Fi when you enable Wi-Fi (LAN) connections.</string>
 </dict>
 </plist>

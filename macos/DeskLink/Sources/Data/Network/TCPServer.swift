@@ -1,8 +1,9 @@
 import Foundation
 import Network
 
-/// TCP server for streaming data to (and receiving bytes from) an Android client
-/// over loopback (ADB forwarding).
+/// TCP server for streaming data to (and receiving bytes from) an Android client.
+/// The listener binds either loopback only (USB via `adb reverse`) or all interfaces
+/// (additionally reachable over the local network), selected per `start(port:scope:)`.
 ///
 /// The client-connection `AsyncStream` and the received-bytes `AsyncStream`, along
 /// with their continuations, are created **once** in `init` and stored, so every
@@ -51,10 +52,20 @@ public final class TCPServer: StreamServing, PacketReceiving, @unchecked Sendabl
         bytesContinuation.finish()
     }
 
-    public func start(port: UInt16) async throws {
+    public func start(port: UInt16, scope: ListenerScope) async throws {
         try lock.withLock {
             let params = NWParameters.tcp
-            params.requiredInterfaceType = .loopback // localhost only (ADB forwarding)
+            switch scope {
+            case .loopback:
+                // localhost only — reachable via the adb reverse tunnel (USB).
+                params.requiredInterfaceType = .loopback
+            case .localNetwork:
+                // Bind all interfaces so the one listener serves both the adb-reverse
+                // loopback path (USB) AND direct LAN clients. Leaving requiredInterfaceType
+                // unset means "any interface". Plaintext/unauthenticated — opt-in only
+                // (see docs/WIFI_TRANSPORT_DESIGN.md).
+                break
+            }
 
             // Set TCP_NODELAY
             if let tcpOptions = params.defaultProtocolStack.transportProtocol as? NWProtocolTCP.Options {

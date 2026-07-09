@@ -14,6 +14,11 @@ public final class SettingsViewModel {
     public private(set) var accessibilityGranted = false
     public private(set) var screenRecordingGranted = false
 
+    /// The Mac's current non-loopback IPv4 addresses, shown so the user knows which
+    /// address to type into the tablet when Wi-Fi (LAN) is enabled. Refreshed alongside
+    /// the permission states.
+    public private(set) var localNetworkAddresses: [String] = []
+
     /// Transient status line for the diagnostics actions (nil = idle).
     public private(set) var diagnosticsStatus: String?
 
@@ -24,6 +29,7 @@ public final class SettingsViewModel {
 
     public init(permissions: PermissionsManaging = SystemPermissions()) {
         self.permissions = permissions
+        self.wifiEnabled = TransportSettings.wifiEnabled
         refresh()
     }
 
@@ -34,11 +40,21 @@ public final class SettingsViewModel {
         set { Log.isVerbose = newValue }
     }
 
-    /// Re-reads both permission states. Called on open and periodically while the
-    /// window is visible, so a change made in System Settings shows up here.
+    /// The "Allow Wi-Fi (LAN) connections" opt-in. Held as an observed stored property
+    /// (so toggling it re-renders the dependent detail UI immediately) and persisted to
+    /// [TransportSettings.wifiEnabled] on change. Read by the server at Start, so a
+    /// change takes effect the next time the server is started.
+    public var wifiEnabled: Bool {
+        didSet { TransportSettings.wifiEnabled = wifiEnabled }
+    }
+
+    /// Re-reads both permission states and the local IPv4 addresses. Called on open and
+    /// periodically while the window is visible, so a change made in System Settings (or
+    /// a network change) shows up here.
     public func refresh() {
         accessibilityGranted = permissions.isAccessibilityGranted()
         screenRecordingGranted = permissions.isScreenRecordingGranted()
+        localNetworkAddresses = NetworkInterfaces.localIPv4Addresses()
     }
 
     public func requestAccessibility() {

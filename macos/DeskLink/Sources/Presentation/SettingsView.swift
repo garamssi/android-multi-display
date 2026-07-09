@@ -24,6 +24,7 @@ struct SettingsView: View {
                 .foregroundStyle(DesignTokens.textPrimary)
 
             permissionsSection
+            connectionSection
             diagnosticsSection
             if showLogs {
                 logViewer
@@ -106,10 +107,10 @@ struct SettingsView: View {
             DesignTokens.surfaceCard,
             in: RoundedRectangle(cornerRadius: DesignTokens.Radius.statsCard, style: .continuous)
         )
-        .overlay(
+        .overlay {
             RoundedRectangle(cornerRadius: DesignTokens.Radius.statsCard, style: .continuous)
                 .strokeBorder(DesignTokens.borderSubtle, lineWidth: 1)
-        )
+        }
     }
 
     private func statusBadge(granted: Bool) -> some View {
@@ -122,6 +123,80 @@ struct SettingsView: View {
                 (granted ? DesignTokens.successGreen : DesignTokens.warningAmber).opacity(0.12),
                 in: RoundedRectangle(cornerRadius: DesignTokens.Radius.chip, style: .continuous)
             )
+    }
+
+    // MARK: - Connection (transport)
+
+    private var connectionSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            sectionTitle("Connection")
+            Toggle(isOn: wifiBinding) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Allow Wi-Fi (LAN) connections")
+                        .font(.plexSans(size: 14, weight: .medium))
+                        .foregroundStyle(DesignTokens.textPrimary)
+                    Text("Let tablets on this network connect directly. Applies on next Start.")
+                        .font(.plexSans(size: 12))
+                        .foregroundStyle(DesignTokens.textSecondary)
+                }
+            }
+            .toggleStyle(.switch)
+            .tint(DesignTokens.accentSolid)
+
+            if viewModel.wifiEnabled {
+                wifiDetails
+            }
+        }
+    }
+
+    /// The Mac's address(es) to type into the tablet, plus the plaintext/dev-only warning.
+    private var wifiDetails: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("This Mac's address")
+                    .font(.plexSans(size: 12, weight: .medium))
+                    .foregroundStyle(DesignTokens.textSecondary)
+                if viewModel.localNetworkAddresses.isEmpty {
+                    Text("No active network found")
+                        .font(.plexMono(size: 12))
+                        .foregroundStyle(DesignTokens.textTertiary)
+                } else {
+                    ForEach(viewModel.localNetworkAddresses, id: \.self) { address in
+                        Text(address)
+                            .font(.plexMono(size: 13))
+                            .foregroundStyle(DesignTokens.textPrimary)
+                            .textSelection(.enabled)
+                    }
+                }
+                Text("Enter this in DeskLink on the tablet (Settings → Connection → Wi-Fi).")
+                    .font(.plexSans(size: 11))
+                    .foregroundStyle(DesignTokens.textTertiary)
+            }
+
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(DesignTokens.warningAmber)
+                    .font(.system(size: 12))
+                Text("Wi-Fi is experimental and unencrypted. Anyone on this network can "
+                    + "view and control your Mac while connected. Use only on a trusted "
+                    + "private network — USB stays the secure default.")
+                    .font(.plexSans(size: 12))
+                    .foregroundStyle(DesignTokens.textSecondary)
+            }
+        }
+        .padding(12)
+        .background(
+            DesignTokens.warningAmber.opacity(0.08),
+            in: RoundedRectangle(cornerRadius: DesignTokens.Radius.statsCard, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: DesignTokens.Radius.statsCard, style: .continuous)
+                .strokeBorder(DesignTokens.warningAmber.opacity(0.24), lineWidth: 1)
+        }
+    }
+
+    private var wifiBinding: Binding<Bool> {
+        Binding(get: { viewModel.wifiEnabled }, set: { viewModel.wifiEnabled = $0 })
     }
 
     // MARK: - Diagnostics
@@ -191,10 +266,10 @@ struct SettingsView: View {
             DesignTokens.surfaceCard,
             in: RoundedRectangle(cornerRadius: DesignTokens.Radius.statsCard, style: .continuous)
         )
-        .overlay(
+        .overlay {
             RoundedRectangle(cornerRadius: DesignTokens.Radius.statsCard, style: .continuous)
                 .strokeBorder(DesignTokens.borderSubtle, lineWidth: 1)
-        )
+        }
     }
 
     private var verboseBinding: Binding<Bool> {

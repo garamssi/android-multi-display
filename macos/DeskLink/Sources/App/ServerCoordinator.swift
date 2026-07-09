@@ -5,7 +5,9 @@ import Foundation
 /// - Video   (7101): capture → encode → stream (VIDEO_CONFIG then VIDEO_FRAME).
 /// - Input   (7102): receive TOUCH_EVENT/TOUCH_BATCH → inject.
 ///
-/// Each channel gets its own `TCPServer`; ADB forwards all three localhost ports.
+/// Each channel gets its own `TCPServer`. By default the listeners bind loopback and
+/// ADB forwards all three ports (USB); when the user enables Wi-Fi, they bind all
+/// interfaces so LAN clients can also connect (see `listenerScope`).
 /// This object owns the transports and use cases and starts/stops them together.
 @MainActor
 public final class ServerCoordinator {
@@ -35,6 +37,11 @@ public final class ServerCoordinator {
     /// Lets a re-negotiation decide between a full reboot (resolution changed) and a
     /// cheap live bitrate change.
     private var currentStreamConfig: DisplayConfig?
+
+    /// Interface scope the listeners bind on, resolved once from the user's Wi-Fi opt-in
+    /// at `start()` and reused for any in-session rebind (bootStreaming re-creates the
+    /// video/input servers). Loopback = USB only; localNetwork = USB + LAN.
+    private var listenerScope: ListenerScope = .loopback
 
     /// Prevents overlapping boot/reboot sequences.
     private var isBooting = false
@@ -78,6 +85,11 @@ public final class ServerCoordinator {
         pipelineTasks.removeAll()
         currentStreamConfig = nil
 
+        // Resolve the listener scope once for this session from the user's opt-in. USB
+        // (loopback) is the default; LAN binding is added only when Wi-Fi is enabled.
+        listenerScope = TransportSettings.wifiEnabled ? .localNetwork : .loopback
+        Log.info(.server, "starting servers scope=\(listenerScope == .localNetwork ? "loopback+LAN" : "loopback")")
+
         // Observability: server is now coming up and listening for a client.
         onStatusChange?(.connecting)
 
@@ -103,9 +115,9 @@ public final class ServerCoordinator {
         // and a bound socket would linger with no teardown path (the caller only flips
         // UI state on catch, it does not know to stop us).
         do {
-            try await controlServer.start(port: ProtocolConstants.portControl)
-            try await videoServer.start(port: ProtocolConstants.portVideo)
-            try await inputServer.start(port: ProtocolConstants.portInput)
+            try await controlServer.start(port: ProtocolConstants.portControl, scope: listenerScope)
+            try await videoServer.start(port: ProtocolConstants.portVideo, scope: listenerScope)
+            try await inputServer.start(port: ProtocolConstants.portInput, scope: listenerScope)
         } catch {
             await portForwardingWatcher.stop()
             await controlServer.stop()
@@ -201,8 +213,8 @@ public final class ServerCoordinator {
             videoServer = TCPServer()
             inputServer = TCPServer()
             screenCapturer = SCKScreenCapturer()
-            try await videoServer.start(port: ProtocolConstants.portVideo)
-            try await inputServer.start(port: ProtocolConstants.portInput)
+            try await videoServer.start(port: ProtocolConstants.portVideo, scope: listenerScope)
+            try await inputServer.start(port: ProtocolConstants.portInput, scope: listenerScope)
         }
 
         // Bring up the virtual display at the CLIENT'S negotiated resolution (first
