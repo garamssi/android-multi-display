@@ -182,6 +182,10 @@ struct SettingsView: View {
                     + "private network — USB stays the secure default.")
                     .font(.plexSans(size: 12))
                     .foregroundStyle(DesignTokens.textSecondary)
+                    // In an HStack a long Text truncates to one line unless it is told to
+                    // grow vertically instead of compressing horizontally.
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .padding(12)
