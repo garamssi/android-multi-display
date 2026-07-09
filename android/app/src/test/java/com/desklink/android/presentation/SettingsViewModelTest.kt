@@ -4,6 +4,7 @@ import com.desklink.android.data.device.ScreenMetricsProvider
 import com.desklink.android.data.device.ScreenResolution
 import com.desklink.android.data.settings.SettingsRepository
 import com.desklink.android.domain.model.DisplayConfig
+import com.desklink.android.domain.model.TransportMode
 import com.desklink.android.presentation.settings.SettingsViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -132,5 +133,25 @@ class SettingsViewModelTest {
 
         repo.setNaturalScroll(true)
         assertTrue(repo.currentNaturalScroll())
+    }
+
+    @Test
+    fun `transport defaults to USB with no manual host`() {
+        val vm = viewModel()
+        assertEquals(TransportMode.USB, vm.uiState.value.transportMode)
+        assertEquals("", vm.uiState.value.manualHost)
+        assertEquals(SettingsRepository.DEFAULT_TRANSPORT_MODE, repository().currentTransportMode())
+    }
+
+    @Test
+    fun `view model transport setters delegate to the repository and trim the host`() {
+        val repo = repository()
+        val vm = SettingsViewModel(repo)
+
+        vm.setTransportMode(TransportMode.LAN)
+        vm.setManualHost("  192.168.1.20  ")
+
+        assertEquals(TransportMode.LAN, repo.currentTransportMode())
+        assertEquals("192.168.1.20", repo.currentManualHost())
     }
 }

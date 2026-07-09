@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.desklink.android.data.settings.SettingsRepository
 import com.desklink.android.domain.model.DisplayConfig
+import com.desklink.android.domain.model.TransportMode
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -27,14 +28,18 @@ class SettingsViewModel @Inject constructor(
             settingsRepository.config,
             settingsRepository.scrollSensitivity,
             settingsRepository.naturalScroll,
-        ) { config, sensitivity, naturalScroll ->
-            config.toUiState(sensitivity, naturalScroll)
+            settingsRepository.transportMode,
+            settingsRepository.manualHost,
+        ) { config, sensitivity, naturalScroll, transportMode, manualHost ->
+            config.toUiState(sensitivity, naturalScroll, transportMode, manualHost)
         }.stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5_000),
             initialValue = settingsRepository.current().toUiState(
                 settingsRepository.currentScrollSensitivity(),
                 settingsRepository.currentNaturalScroll(),
+                settingsRepository.currentTransportMode(),
+                settingsRepository.currentManualHost(),
             ),
         )
 
@@ -54,10 +59,19 @@ class SettingsViewModel @Inject constructor(
 
     fun setNaturalScroll(enabled: Boolean) = settingsRepository.setNaturalScroll(enabled)
 
+    fun setTransportMode(mode: TransportMode) = settingsRepository.setTransportMode(mode)
+
+    fun setManualHost(value: String) = settingsRepository.setManualHost(value)
+
     /** The current user selection as a [DisplayConfig] (used by the connect flow). */
     fun toDisplayConfig(): DisplayConfig = settingsRepository.current()
 
-    private fun DisplayConfig.toUiState(scrollSensitivity: Float, naturalScroll: Boolean) = SettingsUiState(
+    private fun DisplayConfig.toUiState(
+        scrollSensitivity: Float,
+        naturalScroll: Boolean,
+        transportMode: TransportMode,
+        manualHost: String,
+    ) = SettingsUiState(
         width = width,
         height = height,
         fps = fps,
@@ -67,6 +81,8 @@ class SettingsViewModel @Inject constructor(
         nativeHeight = nativeHeight,
         scrollSensitivity = scrollSensitivity,
         naturalScroll = naturalScroll,
+        transportMode = transportMode,
+        manualHost = manualHost,
     )
 }
 
@@ -80,6 +96,8 @@ data class SettingsUiState(
     val nativeHeight: Int = DisplayConfig().nativeHeight,
     val scrollSensitivity: Float = 3.0f,
     val naturalScroll: Boolean = true,
+    val transportMode: TransportMode = TransportMode.USB,
+    val manualHost: String = "",
 ) {
     /** True when the current streaming resolution equals the device's native size. */
     val isNativeSelected: Boolean get() = width == nativeWidth && height == nativeHeight

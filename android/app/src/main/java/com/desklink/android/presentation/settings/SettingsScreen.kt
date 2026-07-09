@@ -17,11 +17,14 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.ChevronLeft
 import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Warning
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -31,11 +34,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.desklink.android.domain.model.DisplayConfig
+import com.desklink.android.domain.model.TransportMode
 import com.desklink.android.presentation.components.GhostTextButton
 import com.desklink.android.presentation.components.MonoText
 import com.desklink.android.presentation.components.ResolutionRadioCard
@@ -113,41 +120,49 @@ fun SettingsScreen(
             ) {
                 val wide = maxWidth >= 720.dp
                 val scroll = rememberScrollState()
-                if (wide) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .verticalScroll(scroll)
-                            .padding(horizontal = 34.dp, vertical = 30.dp),
-                        horizontalArrangement = Arrangement.spacedBy(36.dp),
-                    ) {
-                        ResolutionColumn(
-                            modifier = Modifier.weight(1f),
-                            options = resolutionOptions,
-                            selectedWidth = state.width,
-                            selectedHeight = state.height,
-                            isNativeSelected = state.isNativeSelected,
-                            onSelectNative = viewModel::useNativeResolution,
-                            onSelectPreset = viewModel::setResolution,
-                        )
-                        StreamColumn(
-                            modifier = Modifier.weight(1f),
-                            state = state,
-                            onSetFps = viewModel::setFps,
-                            onSetBitrate = viewModel::setBitrate,
-                            onSetCodec = viewModel::setCodec,
-                            onSetScrollSensitivity = viewModel::setScrollSensitivity,
-                            onSetNaturalScroll = viewModel::setNaturalScroll,
-                        )
-                    }
-                } else {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .verticalScroll(scroll)
-                            .padding(horizontal = 24.dp, vertical = 26.dp),
-                        verticalArrangement = Arrangement.spacedBy(30.dp),
-                    ) {
+                // The Connection (transport) section spans full width above the
+                // resolution/stream columns; the body scrolls as one.
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .verticalScroll(scroll)
+                        .padding(
+                            horizontal = if (wide) 34.dp else 24.dp,
+                            vertical = if (wide) 30.dp else 26.dp,
+                        ),
+                    verticalArrangement = Arrangement.spacedBy(30.dp),
+                ) {
+                    ConnectionSection(
+                        transportMode = state.transportMode,
+                        manualHost = state.manualHost,
+                        onSelectMode = viewModel::setTransportMode,
+                        onManualHostChange = viewModel::setManualHost,
+                    )
+                    if (wide) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(36.dp),
+                        ) {
+                            ResolutionColumn(
+                                modifier = Modifier.weight(1f),
+                                options = resolutionOptions,
+                                selectedWidth = state.width,
+                                selectedHeight = state.height,
+                                isNativeSelected = state.isNativeSelected,
+                                onSelectNative = viewModel::useNativeResolution,
+                                onSelectPreset = viewModel::setResolution,
+                            )
+                            StreamColumn(
+                                modifier = Modifier.weight(1f),
+                                state = state,
+                                onSetFps = viewModel::setFps,
+                                onSetBitrate = viewModel::setBitrate,
+                                onSetCodec = viewModel::setCodec,
+                                onSetScrollSensitivity = viewModel::setScrollSensitivity,
+                                onSetNaturalScroll = viewModel::setNaturalScroll,
+                            )
+                        }
+                    } else {
                         ResolutionColumn(
                             options = resolutionOptions,
                             selectedWidth = state.width,
@@ -367,6 +382,114 @@ private fun StreamColumn(
 
         // Estimated-stream summary chip (green-tinted).
         SummaryChip(state = state)
+    }
+}
+
+/**
+ * Transport selector: USB (secure default) vs Wi-Fi (LAN). LAN reveals a manual Mac-IP
+ * field and an unmissable warning — it is plaintext/unauthenticated in this phase, so
+ * it must be an explicit, informed opt-in (development only).
+ */
+@Composable
+private fun ConnectionSection(
+    transportMode: TransportMode,
+    manualHost: String,
+    onSelectMode: (TransportMode) -> Unit,
+    onManualHostChange: (String) -> Unit,
+) {
+    Column {
+        SectionLabel("Connection")
+        Spacer(Modifier.height(14.dp))
+        SegmentedControl(
+            options = listOf(TransportMode.USB, TransportMode.LAN),
+            selected = transportMode,
+            onSelect = onSelectMode,
+        ) { mode, isSelected ->
+            SegmentLabel(
+                text = if (mode == TransportMode.USB) "USB" else "Wi-Fi (LAN)",
+                isSelected = isSelected,
+            )
+        }
+        if (transportMode == TransportMode.LAN) {
+            Spacer(Modifier.height(14.dp))
+            MacIpField(value = manualHost, onValueChange = onManualHostChange)
+            Spacer(Modifier.height(12.dp))
+            WarningNote(
+                text = "Wi-Fi is experimental and unencrypted. Anyone on this network " +
+                    "can view and control your Mac while connected. Use only on a " +
+                    "trusted private network — USB stays the secure default.",
+            )
+        }
+    }
+}
+
+/** Manual Mac IP / hostname entry for LAN mode, styled to match the chip cards. */
+@Composable
+private fun MacIpField(value: String, onValueChange: (String) -> Unit) {
+    BasicTextField(
+        value = value,
+        onValueChange = onValueChange,
+        singleLine = true,
+        textStyle = TextStyle(
+            color = DeskLinkTokens.TextPrimary,
+            fontFamily = PlexSans,
+            fontSize = 15.sp,
+        ),
+        cursorBrush = SolidColor(DeskLinkTokens.AccentLight),
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+        modifier = Modifier.fillMaxWidth(),
+        decorationBox = { innerTextField ->
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(DeskLinkTokens.ShapeChip)
+                    .background(color = DeskLinkTokens.Surface03, shape = DeskLinkTokens.ShapeChip)
+                    .border(BorderStroke(1.dp, DeskLinkTokens.Border10), DeskLinkTokens.ShapeChip)
+                    .padding(horizontal = 14.dp, vertical = 13.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(modifier = Modifier.weight(1f)) {
+                    if (value.isEmpty()) {
+                        Text(
+                            text = "Mac IP address (e.g. 192.168.0.10)",
+                            color = DeskLinkTokens.TextQuaternary,
+                            fontFamily = PlexSans,
+                            fontSize = 15.sp,
+                        )
+                    }
+                    innerTextField()
+                }
+            }
+        },
+    )
+}
+
+/** Amber-tinted caution note (mirrors [InfoNote] styling with a warning color). */
+@Composable
+private fun WarningNote(text: String) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(DeskLinkTokens.ShapeChip)
+            .background(color = DeskLinkTokens.WarningChipBg, shape = DeskLinkTokens.ShapeChip)
+            .border(BorderStroke(1.dp, DeskLinkTokens.WarningChipBorder), DeskLinkTokens.ShapeChip)
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(9.dp),
+    ) {
+        Icon(
+            imageVector = Icons.Outlined.Warning,
+            contentDescription = null,
+            tint = DeskLinkTokens.Warning,
+            modifier = Modifier
+                .size(16.dp)
+                .padding(top = 1.dp),
+        )
+        Text(
+            text = text,
+            color = DeskLinkTokens.TextBody,
+            fontFamily = PlexSans,
+            fontSize = 12.5.sp,
+        )
     }
 }
 

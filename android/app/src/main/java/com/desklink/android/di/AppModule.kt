@@ -5,7 +5,7 @@ import com.desklink.android.data.device.ScreenMetricsProvider
 import com.desklink.android.data.device.UsbStateMonitorImpl
 import com.desklink.android.data.input.InputRepositoryImpl
 import com.desklink.android.data.network.ConnectionManagerImpl
-import com.desklink.android.data.transport.UsbTransport
+import com.desklink.android.data.transport.RoutingTransport
 import com.desklink.android.data.video.VideoStreamRepositoryImpl
 import com.desklink.android.domain.repository.ConnectionRepository
 import com.desklink.android.domain.repository.InputRepository
@@ -58,10 +58,12 @@ abstract class AppModule {
         impl: UsbStateMonitorImpl,
     ): UsbStateMonitor
 
-    // USB is the only transport today; the LAN transport binds here in a later phase.
+    // The channels depend on a single Transport; RoutingTransport picks the USB or LAN
+    // strategy from the user-selected mode (both strategies are @Inject-constructable,
+    // so no extra bindings are needed for them).
     @Binds
     @Singleton
     abstract fun bindTransport(
-        impl: UsbTransport,
+        impl: RoutingTransport,
     ): Transport
 }

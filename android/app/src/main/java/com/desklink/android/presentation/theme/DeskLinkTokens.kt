@@ -76,6 +76,8 @@ object DeskLinkTokens {
     val ErrorChipText = Color(0xFF7A5B5B)
     val SuccessChipBg = Success.copy(alpha = 0.08f)
     val SuccessChipBorder = Success.copy(alpha = 0.20f)
+    val WarningChipBg = Warning.copy(alpha = 0.08f)
+    val WarningChipBorder = Warning.copy(alpha = 0.24f)
 
     // Glass overlay button (backdrop-blur can't be reproduced 1:1 in Compose, so we
     // use a near-opaque dark fill that reads the same against the stream).

@@ -2,6 +2,7 @@ package com.desklink.android.data.settings
 
 import com.desklink.android.data.device.ScreenMetricsProvider
 import com.desklink.android.domain.model.DisplayConfig
+import com.desklink.android.domain.model.TransportMode
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -60,6 +61,24 @@ class SettingsRepository @Inject constructor(
     private val _naturalScroll = MutableStateFlow(DEFAULT_NATURAL_SCROLL)
     val naturalScroll: StateFlow<Boolean> = _naturalScroll.asStateFlow()
 
+    /**
+     * How the client reaches the Mac ([TransportMode.USB] by default). Read by the
+     * transport layer at connect time, so changing it in Settings then reconnecting
+     * switches the dial target. LAN is plaintext/dev-only in this phase (see
+     * [TransportMode]).
+     */
+    private val _transportMode = MutableStateFlow(DEFAULT_TRANSPORT_MODE)
+    val transportMode: StateFlow<TransportMode> = _transportMode.asStateFlow()
+
+    /**
+     * The Mac's IP (or hostname) to dial in [TransportMode.LAN], entered manually
+     * (no discovery in this phase). Ignored in USB mode. Blank until the user enters
+     * one; a blank host in LAN mode surfaces as a connection error, not a silent
+     * fallback.
+     */
+    private val _manualHost = MutableStateFlow("")
+    val manualHost: StateFlow<String> = _manualHost.asStateFlow()
+
     fun setResolution(width: Int, height: Int) =
         _config.update { it.copy(width = width, height = height) }
 
@@ -74,11 +93,20 @@ class SettingsRepository @Inject constructor(
 
     fun setNaturalScroll(enabled: Boolean) = _naturalScroll.update { enabled }
 
+    fun setTransportMode(mode: TransportMode) = _transportMode.update { mode }
+
+    /** Stores the manual LAN host, trimmed (surrounding whitespace is never a valid host). */
+    fun setManualHost(value: String) = _manualHost.update { value.trim() }
+
     fun current(): DisplayConfig = _config.value
 
     fun currentScrollSensitivity(): Float = _scrollSensitivity.value
 
     fun currentNaturalScroll(): Boolean = _naturalScroll.value
+
+    fun currentTransportMode(): TransportMode = _transportMode.value
+
+    fun currentManualHost(): String = _manualHost.value
 
     companion object {
         const val MIN_SCROLL_SENSITIVITY = 1.0f
@@ -87,5 +115,7 @@ class SettingsRepository @Inject constructor(
         const val DEFAULT_SCROLL_SENSITIVITY = 3.0f
         /** Natural scrolling on by default (macOS default, current behavior). */
         const val DEFAULT_NATURAL_SCROLL = true
+        /** USB is the default and only secure transport today; LAN is opt-in. */
+        val DEFAULT_TRANSPORT_MODE = TransportMode.USB
     }
 }
