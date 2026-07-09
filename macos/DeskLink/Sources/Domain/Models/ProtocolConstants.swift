@@ -14,6 +14,16 @@ public enum ProtocolConstants {
     // only needs the resolved host; the video/input ports are the fixed constants above.
     public static let bonjourServiceType = "_desklink._tcp"
 
+    // LAN pairing (P3, TLS-PSK). Cross-platform contract with the Android client: both
+    // sides derive the identical pre-shared key from the 6-digit PIN via HKDF-SHA256
+    // (RFC 5869) over these parameters, or the TLS-PSK handshake fails. Reference +
+    // golden vectors: tools/pairing_vectors.py. USB does not use any of this.
+    public static let pskHkdfSalt = "desklink-pairing-v1"
+    public static let pskHkdfInfo = "desklink-psk"
+    public static let pskLengthBytes = 32
+    public static let pskIdentity = "desklink"
+    public static let pairingPinLength = 6
+
     // Packet limits
     public static let maxPacketSize = 4 * 1024 * 1024 // 4MB
 

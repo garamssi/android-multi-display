@@ -21,6 +21,16 @@ object ProtocolConstants {
     // returns nothing.
     const val SERVICE_TYPE = "_desklink._tcp"
 
+    // LAN pairing (P3, TLS-PSK). Cross-platform contract with the macOS server: both
+    // sides derive the identical pre-shared key from the 6-digit PIN via HKDF-SHA256
+    // (RFC 5869) over these parameters, or the TLS-PSK handshake fails. Reference +
+    // golden vectors: tools/pairing_vectors.py. USB does not use any of this.
+    const val PSK_HKDF_SALT = "desklink-pairing-v1"
+    const val PSK_HKDF_INFO = "desklink-psk"
+    const val PSK_LENGTH_BYTES = 32
+    const val PSK_IDENTITY = "desklink"
+    const val PAIRING_PIN_LENGTH = 6
+
     // Packet limits
     const val MAX_PACKET_SIZE = 4 * 1024 * 1024 // 4MB
 
