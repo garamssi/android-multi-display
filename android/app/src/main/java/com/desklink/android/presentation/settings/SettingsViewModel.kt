@@ -5,11 +5,17 @@ import androidx.lifecycle.viewModelScope
 import com.desklink.android.data.settings.SettingsRepository
 import com.desklink.android.domain.model.DisplayConfig
 import com.desklink.android.domain.model.TransportMode
+import com.desklink.android.domain.transport.DiscoveredServer
+import com.desklink.android.domain.transport.PeerDiscovery
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 /**
@@ -21,7 +27,14 @@ import javax.inject.Inject
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
     private val settingsRepository: SettingsRepository,
+    private val peerDiscovery: PeerDiscovery,
 ) : ViewModel() {
+
+    /** Servers discovered on the LAN (empty until [startDiscovery] runs). */
+    private val _discoveredServers = MutableStateFlow<List<DiscoveredServer>>(emptyList())
+    val discoveredServers: StateFlow<List<DiscoveredServer>> = _discoveredServers.asStateFlow()
+
+    private var discoveryJob: Job? = null
 
     val uiState: StateFlow<SettingsUiState> =
         combine(
@@ -62,6 +75,30 @@ class SettingsViewModel @Inject constructor(
     fun setTransportMode(mode: TransportMode) = settingsRepository.setTransportMode(mode)
 
     fun setManualHost(value: String) = settingsRepository.setManualHost(value)
+
+    /** Begins LAN discovery (call only after the Wi-Fi permission is granted). Idempotent. */
+    fun startDiscovery() {
+        if (discoveryJob?.isActive == true) return
+        discoveryJob = viewModelScope.launch {
+            peerDiscovery.servers().collect { _discoveredServers.value = it }
+        }
+    }
+
+    /** Stops LAN discovery and clears the list (releases the multicast lock). */
+    fun stopDiscovery() {
+        discoveryJob?.cancel()
+        discoveryJob = null
+        _discoveredServers.value = emptyList()
+    }
+
+    /** Selects a discovered server as the LAN dial target (fills the manual host). */
+    fun selectDiscoveredServer(server: DiscoveredServer) =
+        settingsRepository.setManualHost(server.host)
+
+    override fun onCleared() {
+        super.onCleared()
+        stopDiscovery()
+    }
 
     /** The current user selection as a [DisplayConfig] (used by the connect flow). */
     fun toDisplayConfig(): DisplayConfig = settingsRepository.current()

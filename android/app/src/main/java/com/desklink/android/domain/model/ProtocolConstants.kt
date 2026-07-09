@@ -13,6 +13,14 @@ object ProtocolConstants {
     const val PORT_VIDEO = 7101
     const val PORT_INPUT = 7102
 
+    // Bonjour/NSD service type the Mac advertises on the control port over Wi-Fi (LAN).
+    // Cross-platform contract with the macOS server's `bonjourServiceType`. Discovery
+    // yields the Mac's host; the video/input ports remain the fixed constants above.
+    // Note: NsdManager can be picky about a trailing dot across OS versions; this base
+    // form works with discoverServices on current Android. Verify on-device if discovery
+    // returns nothing.
+    const val SERVICE_TYPE = "_desklink._tcp"
+
     // Packet limits
     const val MAX_PACKET_SIZE = 4 * 1024 * 1024 // 4MB
 

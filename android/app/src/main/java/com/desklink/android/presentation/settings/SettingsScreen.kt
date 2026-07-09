@@ -1,5 +1,10 @@
 package com.desklink.android.presentation.settings
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -28,6 +33,7 @@ import androidx.compose.material.icons.outlined.Warning
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -35,14 +41,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.desklink.android.domain.model.DisplayConfig
 import com.desklink.android.domain.model.TransportMode
+import com.desklink.android.domain.transport.DiscoveredServer
 import com.desklink.android.presentation.components.GhostTextButton
 import com.desklink.android.presentation.components.MonoText
 import com.desklink.android.presentation.components.ResolutionRadioCard
@@ -72,6 +81,7 @@ fun SettingsScreen(
     viewModel: SettingsViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsState()
+    val discoveredServers by viewModel.discoveredServers.collectAsState()
 
     // Resolution options are DERIVED from the detected native panel size: "Native"
     // first, then standard presets that are <= native (capped at native), with any
@@ -135,8 +145,12 @@ fun SettingsScreen(
                     ConnectionSection(
                         transportMode = state.transportMode,
                         manualHost = state.manualHost,
+                        discoveredServers = discoveredServers,
                         onSelectMode = viewModel::setTransportMode,
                         onManualHostChange = viewModel::setManualHost,
+                        onStartDiscovery = viewModel::startDiscovery,
+                        onStopDiscovery = viewModel::stopDiscovery,
+                        onSelectServer = viewModel::selectDiscoveredServer,
                     )
                     if (wide) {
                         Row(
@@ -394,8 +408,12 @@ private fun StreamColumn(
 private fun ConnectionSection(
     transportMode: TransportMode,
     manualHost: String,
+    discoveredServers: List<DiscoveredServer>,
     onSelectMode: (TransportMode) -> Unit,
     onManualHostChange: (String) -> Unit,
+    onStartDiscovery: () -> Unit,
+    onStopDiscovery: () -> Unit,
+    onSelectServer: (DiscoveredServer) -> Unit,
 ) {
     Column {
         SectionLabel("Connection")
@@ -413,6 +431,13 @@ private fun ConnectionSection(
         if (transportMode == TransportMode.LAN) {
             Spacer(Modifier.height(14.dp))
             MacIpField(value = manualHost, onValueChange = onManualHostChange)
+            Spacer(Modifier.height(14.dp))
+            DiscoverySection(
+                servers = discoveredServers,
+                onStartDiscovery = onStartDiscovery,
+                onStopDiscovery = onStopDiscovery,
+                onSelectServer = onSelectServer,
+            )
             Spacer(Modifier.height(12.dp))
             WarningNote(
                 text = "Wi-Fi is experimental and unencrypted. Anyone on this network " +
@@ -420,6 +445,86 @@ private fun ConnectionSection(
                     "trusted private network — USB stays the secure default.",
             )
         }
+    }
+}
+
+/**
+ * Discover Macs advertising over Bonjour and pick one (fills the IP field). Handles the
+ * NEARBY_WIFI_DEVICES runtime permission (Android 13+) and stops the scan — releasing the
+ * multicast lock — when this leaves composition (mode switched away or screen closed).
+ */
+@Composable
+private fun DiscoverySection(
+    servers: List<DiscoveredServer>,
+    onStartDiscovery: () -> Unit,
+    onStopDiscovery: () -> Unit,
+    onSelectServer: (DiscoveredServer) -> Unit,
+) {
+    val context = LocalContext.current
+    val needsPermission = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted -> if (granted) onStartDiscovery() }
+
+    DisposableEffect(Unit) {
+        onDispose { onStopDiscovery() }
+    }
+
+    Column {
+        SectionLabel("Discovered on Wi-Fi")
+        Spacer(Modifier.height(10.dp))
+        GhostTextButton(
+            text = "Find my Mac",
+            onClick = {
+                val granted = !needsPermission || ContextCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.NEARBY_WIFI_DEVICES,
+                ) == PackageManager.PERMISSION_GRANTED
+                if (granted) onStartDiscovery() else permissionLauncher.launch(Manifest.permission.NEARBY_WIFI_DEVICES)
+            },
+            fontSize = 14.sp,
+        )
+        servers.forEach { server ->
+            Spacer(Modifier.height(8.dp))
+            DiscoveredServerRow(server = server, onClick = { onSelectServer(server) })
+        }
+    }
+}
+
+@Composable
+private fun DiscoveredServerRow(server: DiscoveredServer, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(DeskLinkTokens.ShapeChip)
+            .background(color = DeskLinkTokens.Surface04, shape = DeskLinkTokens.ShapeChip)
+            .border(BorderStroke(1.dp, DeskLinkTokens.Border10), DeskLinkTokens.ShapeChip)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = server.name,
+                color = DeskLinkTokens.TextPrimary,
+                fontFamily = PlexSans,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.W600,
+            )
+            MonoText(
+                text = server.host,
+                color = DeskLinkTokens.TextQuaternary,
+                fontSize = 12.sp,
+            )
+        }
+        Text(
+            text = "Use",
+            color = DeskLinkTokens.AccentLight,
+            fontFamily = PlexSans,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.W600,
+        )
     }
 }
 

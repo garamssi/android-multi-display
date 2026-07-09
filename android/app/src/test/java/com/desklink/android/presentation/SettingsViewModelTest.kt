@@ -5,11 +5,17 @@ import com.desklink.android.data.device.ScreenResolution
 import com.desklink.android.data.settings.SettingsRepository
 import com.desklink.android.domain.model.DisplayConfig
 import com.desklink.android.domain.model.TransportMode
+import com.desklink.android.domain.transport.DiscoveredServer
+import com.desklink.android.domain.transport.PeerDiscovery
 import com.desklink.android.presentation.settings.SettingsViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -34,8 +40,19 @@ class SettingsViewModelTest {
             },
         )
 
-    private fun viewModel(nativeWidth: Int = 2560, nativeHeight: Int = 1600): SettingsViewModel =
-        SettingsViewModel(repository(nativeWidth, nativeHeight))
+    /** PeerDiscovery double emitting a fixed server list. */
+    private class FakeDiscovery(
+        private val flow: Flow<List<DiscoveredServer>> = flowOf(emptyList()),
+    ) : PeerDiscovery {
+        override fun servers(): Flow<List<DiscoveredServer>> = flow
+    }
+
+    private fun viewModel(
+        nativeWidth: Int = 2560,
+        nativeHeight: Int = 1600,
+        discovery: PeerDiscovery = FakeDiscovery(),
+    ): SettingsViewModel =
+        SettingsViewModel(repository(nativeWidth, nativeHeight), discovery)
 
     @BeforeEach
     fun setUp() {
@@ -146,12 +163,40 @@ class SettingsViewModelTest {
     @Test
     fun `view model transport setters delegate to the repository and trim the host`() {
         val repo = repository()
-        val vm = SettingsViewModel(repo)
+        val vm = SettingsViewModel(repo, FakeDiscovery())
 
         vm.setTransportMode(TransportMode.LAN)
         vm.setManualHost("  192.168.1.20  ")
 
         assertEquals(TransportMode.LAN, repo.currentTransportMode())
         assertEquals("192.168.1.20", repo.currentManualHost())
+    }
+
+    @Test
+    fun `startDiscovery publishes discovered servers and selecting one sets the manual host`() = runTest {
+        val repo = repository()
+        val found = DiscoveredServer(name = "Garam's Mac", host = "192.168.0.5", port = 7100)
+        val vm = SettingsViewModel(repo, FakeDiscovery(flowOf(listOf(found))))
+
+        vm.startDiscovery()
+        advanceUntilIdle()
+        assertEquals(listOf(found), vm.discoveredServers.value)
+
+        vm.selectDiscoveredServer(found)
+        assertEquals("192.168.0.5", repo.currentManualHost())
+    }
+
+    @Test
+    fun `stopDiscovery clears the discovered list`() = runTest {
+        val vm = viewModel(discovery = FakeDiscovery(flowOf(listOf(
+            DiscoveredServer("Mac", "10.0.0.2", 7100),
+        ))))
+
+        vm.startDiscovery()
+        advanceUntilIdle()
+        assertTrue(vm.discoveredServers.value.isNotEmpty())
+
+        vm.stopDiscovery()
+        assertTrue(vm.discoveredServers.value.isEmpty())
     }
 }

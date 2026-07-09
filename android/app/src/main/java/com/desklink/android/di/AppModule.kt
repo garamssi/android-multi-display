@@ -3,6 +3,7 @@ package com.desklink.android.di
 import com.desklink.android.data.device.AndroidScreenMetricsProvider
 import com.desklink.android.data.device.ScreenMetricsProvider
 import com.desklink.android.data.device.UsbStateMonitorImpl
+import com.desklink.android.data.discovery.NsdPeerDiscovery
 import com.desklink.android.data.input.InputRepositoryImpl
 import com.desklink.android.data.network.ConnectionManagerImpl
 import com.desklink.android.data.transport.RoutingTransport
@@ -11,6 +12,7 @@ import com.desklink.android.domain.repository.ConnectionRepository
 import com.desklink.android.domain.repository.InputRepository
 import com.desklink.android.domain.repository.UsbStateMonitor
 import com.desklink.android.domain.repository.VideoStreamRepository
+import com.desklink.android.domain.transport.PeerDiscovery
 import com.desklink.android.domain.transport.Transport
 import dagger.Binds
 import dagger.Module
@@ -66,4 +68,10 @@ abstract class AppModule {
     abstract fun bindTransport(
         impl: RoutingTransport,
     ): Transport
+
+    @Binds
+    @Singleton
+    abstract fun bindPeerDiscovery(
+        impl: NsdPeerDiscovery,
+    ): PeerDiscovery
 }
