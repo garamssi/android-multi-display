@@ -35,5 +35,11 @@
          loopback) does not require this. -->
     <key>NSLocalNetworkUsageDescription</key>
     <string>DeskLink uses your local network to connect to your tablet over Wi-Fi when you enable Wi-Fi (LAN) connections.</string>
+    <!-- Bonjour service advertised on the control port so the tablet can discover this
+         Mac over Wi-Fi (required to advertise/browse via NWListener on macOS 15+). -->
+    <key>NSBonjourServices</key>
+    <array>
+        <string>_desklink._tcp</string>
+    </array>
 </dict>
 </plist>

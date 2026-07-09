@@ -19,6 +19,11 @@ public final class TCPServer: StreamServing, PacketReceiving, @unchecked Sendabl
     private var activeConnection: NWConnection?
     private let lock = NSLock()
 
+    /// Bonjour service type to advertise on this listener so tablets can discover the
+    /// Mac without a typed IP. Set only for the control channel in LAN mode (see
+    /// [advertiseBonjour]); nil (default) means no advertisement. Guarded by [lock].
+    private var bonjourServiceType: String?
+
     private let connectionStream: AsyncStream<ClientConnection>
     private let connectionContinuation: AsyncStream<ClientConnection>.Continuation
 
@@ -52,6 +57,12 @@ public final class TCPServer: StreamServing, PacketReceiving, @unchecked Sendabl
         bytesContinuation.finish()
     }
 
+    /// Configure Bonjour advertisement, applied on the next `start`. Only the control
+    /// channel advertises, and only in LAN mode; pass nil (or don't call) otherwise.
+    public func advertiseBonjour(serviceType: String?) {
+        lock.withLock { bonjourServiceType = serviceType }
+    }
+
     public func start(port: UInt16, scope: ListenerScope) async throws {
         try lock.withLock {
             let params = NWParameters.tcp
@@ -74,6 +85,14 @@ public final class TCPServer: StreamServing, PacketReceiving, @unchecked Sendabl
 
             let nwPort = NWEndpoint.Port(rawValue: port)!
             let newListener = try NWListener(using: params, on: nwPort)
+
+            // Advertise over Bonjour when configured (control channel, LAN mode). The
+            // advertised name defaults to the device name, which the tablet shows in its
+            // discovery list. Requires NSBonjourServices + NSLocalNetworkUsageDescription
+            // in Info.plist.
+            if let serviceType = bonjourServiceType {
+                newListener.service = NWListener.Service(type: serviceType)
+            }
 
             newListener.stateUpdateHandler = { [weak self] state in
                 switch state {
