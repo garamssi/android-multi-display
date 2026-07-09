@@ -191,7 +191,14 @@ WiFi는 IP 변동/로밍 특성이 있다. 방금 하드닝한 `ConnectionManage
 
 각 단계는 독립적으로 빌드/테스트되며 USB 회귀가 없어야 한다.
 
-### P0 — 전송 추상화 리팩터링 (동작 변화 없음, 기반)
+> 구현 현황: P0·P1 완료(빌드 대기). 단순화를 위해 P0/P1의 `Transport`는
+> `suspend fun host(): String`만 노출하고, `ConnectionTarget`/`SecurityMode`/
+> `SecureChannel`(보안 분리)은 실제로 필요해지는 P3에서 도입한다(현 단계 LAN은 평문
+> 개발 전용이라 보안 타입을 미리 만드는 것은 근거 없는 추상화이므로 미룬다). 안드로이드는
+> `RoutingTransport`가 사용자 선택 모드로 `UsbTransport`/`LanTransport` 중 host를 고르고,
+> 맥은 `ListenerScope`(loopback/localNetwork)로 리스너 바인딩을 고른다.
+
+### P0 — 전송 추상화 리팩터링 (동작 변화 없음, 기반)  ✔ 완료
 - 목표: §1의 하드코딩을 `Transport`/`SecureChannel` 뒤로 이동. USB 경로를 그대로 통과시키는
   순수 리팩터링. 이것이 이후 모든 단계를 여는 근본 수정.
 - 변경: `TCPClient.connect(host, port)`; 세 채널이 `Transport.target()` 사용; `UsbTransport` +
@@ -199,7 +206,7 @@ WiFi는 IP 변동/로밍 특성이 있다. 방금 하드닝한 `ConnectionManage
 - TDD: 상위 로직이 fake `Transport`(host/security만 제공)로 동작 — 회귀 없음. 기존 테스트 유지.
 - DoD: USB 연결/스트림/입력/재연결이 이전과 동일. 새 경고 없음.
 
-### P1 — 수동 IP LAN (디스커버리 없이, 평문, 개발 전용 게이트)
+### P1 — 수동 IP LAN (디스커버리 없이, 평문, 개발 전용 게이트)  ✔ 완료
 - 목표: 파이프라인이 LAN 위에서 도는지 검증. **배포 기본값 금지** — 명시 opt-in + 경고.
 - 변경: 맥 `TCPServer` 네트워크 바인딩(LAN 리스너) + Local Network 권한 처리; 안드로이드 설정에
   "맥 IP 직접 입력" + `LanTransport`.
