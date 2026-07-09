@@ -9,6 +9,7 @@ import com.desklink.android.domain.model.DisplayConfig
 import com.desklink.android.domain.model.MessageType
 import com.desklink.android.domain.model.ProtocolConstants
 import com.desklink.android.domain.repository.VideoStreamRepository
+import com.desklink.android.domain.transport.Transport
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
@@ -31,6 +32,7 @@ import javax.inject.Inject
 class VideoStreamRepositoryImpl @Inject constructor(
     private val videoClient: TCPClient,
     private val decoder: HEVCDecoder,
+    private val transport: Transport,
 ) : VideoStreamRepository {
 
     @Volatile
@@ -72,8 +74,9 @@ class VideoStreamRepositoryImpl @Inject constructor(
             negotiated = config
             configured = false
             try {
-                Log.i(TAG, "connecting video channel to 127.0.0.1:${ProtocolConstants.PORT_VIDEO}")
-                videoClient.connect(ProtocolConstants.PORT_VIDEO)
+                val host = transport.host()
+                Log.i(TAG, "connecting video channel to $host:${ProtocolConstants.PORT_VIDEO}")
+                videoClient.connect(host, ProtocolConstants.PORT_VIDEO)
                 Log.i(TAG, "video channel connected; waiting for VIDEO_CONFIG. surface=${surface != null}")
 
                 var frameCount = 0

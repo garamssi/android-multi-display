@@ -8,6 +8,7 @@ import com.desklink.android.domain.model.ProtocolConstants
 import com.desklink.android.domain.model.ScrollEvent
 import com.desklink.android.domain.model.TouchEvent
 import com.desklink.android.domain.repository.InputRepository
+import com.desklink.android.domain.transport.Transport
 import java.io.IOException
 import javax.inject.Inject
 
@@ -18,10 +19,11 @@ import javax.inject.Inject
  */
 class InputRepositoryImpl @Inject constructor(
     private val inputClient: TCPClient,
+    private val transport: Transport,
 ) : InputRepository {
 
     override suspend fun connect() {
-        inputClient.connect(ProtocolConstants.PORT_INPUT)
+        inputClient.connect(transport.host(), ProtocolConstants.PORT_INPUT)
     }
 
     override suspend fun sendTouchEvent(event: TouchEvent) {

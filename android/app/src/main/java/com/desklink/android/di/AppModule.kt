@@ -5,11 +5,13 @@ import com.desklink.android.data.device.ScreenMetricsProvider
 import com.desklink.android.data.device.UsbStateMonitorImpl
 import com.desklink.android.data.input.InputRepositoryImpl
 import com.desklink.android.data.network.ConnectionManagerImpl
+import com.desklink.android.data.transport.UsbTransport
 import com.desklink.android.data.video.VideoStreamRepositoryImpl
 import com.desklink.android.domain.repository.ConnectionRepository
 import com.desklink.android.domain.repository.InputRepository
 import com.desklink.android.domain.repository.UsbStateMonitor
 import com.desklink.android.domain.repository.VideoStreamRepository
+import com.desklink.android.domain.transport.Transport
 import dagger.Binds
 import dagger.Module
 import dagger.hilt.InstallIn
@@ -55,4 +57,11 @@ abstract class AppModule {
     abstract fun bindUsbStateMonitor(
         impl: UsbStateMonitorImpl,
     ): UsbStateMonitor
+
+    // USB is the only transport today; the LAN transport binds here in a later phase.
+    @Binds
+    @Singleton
+    abstract fun bindTransport(
+        impl: UsbTransport,
+    ): Transport
 }

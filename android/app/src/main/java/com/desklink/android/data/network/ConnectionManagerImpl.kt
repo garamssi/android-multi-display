@@ -7,6 +7,7 @@ import com.desklink.android.domain.model.MessageType
 import com.desklink.android.domain.model.ProtocolConstants
 import android.util.Log
 import com.desklink.android.domain.repository.ConnectionRepository
+import com.desklink.android.domain.transport.Transport
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -29,6 +30,7 @@ import javax.inject.Singleton
 class ConnectionManagerImpl @Inject constructor(
     private val handshakeClient: HandshakeClient,
     private val controlClient: TCPClient,
+    private val transport: Transport,
 ) : ConnectionRepository {
 
     /**
@@ -122,9 +124,10 @@ class ConnectionManagerImpl @Inject constructor(
                     "codec=${config.codec} bitrate=${config.bitrateKbps}kbps",
             )
 
-            // Connect control channel (USB/ADB localhost).
-            Log.i(TAG, "connecting control channel to 127.0.0.1:${ProtocolConstants.PORT_CONTROL}")
-            controlClient.connect(ProtocolConstants.PORT_CONTROL)
+            // Connect control channel to the transport-resolved host (USB loopback / LAN IP).
+            val host = transport.host()
+            Log.i(TAG, "connecting control channel to $host:${ProtocolConstants.PORT_CONTROL}")
+            controlClient.connect(host, ProtocolConstants.PORT_CONTROL)
             Log.i(TAG, "control channel connected; sending HANDSHAKE_REQUEST")
 
             // Advertise the device's REAL native screen size so the Mac's width clamp

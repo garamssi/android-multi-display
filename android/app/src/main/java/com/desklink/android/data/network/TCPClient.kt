@@ -24,10 +24,12 @@ import javax.inject.Inject
 class PacketFramingException(message: String) : IOException(message)
 
 /**
- * TCP client for connecting to the Mac server via ADB-forwarded localhost ports.
+ * TCP client for connecting to the Mac server.
  *
- * Connection priority is USB(ADB): we always dial `127.0.0.1:<port>` which ADB
- * tunnels over USB to the Mac server.
+ * The `host` is supplied by the caller (resolved from the active
+ * [com.desklink.android.domain.transport.Transport]): USB dials the device's loopback
+ * (`127.0.0.1`), which ADB reverse-tunnels to the Mac; a LAN transport supplies the
+ * Mac's IP. This client is transport-agnostic — it just dials `host:port`.
  */
 class TCPClient @Inject constructor() {
     private var socket: Socket? = null
@@ -36,7 +38,7 @@ class TCPClient @Inject constructor() {
     val isConnected: Boolean
         get() = socket?.isConnected == true && socket?.isClosed == false
 
-    suspend fun connect(port: Int) = withContext(Dispatchers.IO) {
+    suspend fun connect(host: String, port: Int) = withContext(Dispatchers.IO) {
         disconnect()
         val newSocket = Socket()
         try {
@@ -46,7 +48,7 @@ class TCPClient @Inject constructor() {
             newSocket.receiveBufferSize = ProtocolConstants.SOCKET_BUFFER_SIZE
             newSocket.soTimeout = 0 // blocking reads
             newSocket.connect(
-                InetSocketAddress("127.0.0.1", port),
+                InetSocketAddress(host, port),
                 ProtocolConstants.HANDSHAKE_TIMEOUT.toInt()
             )
             socket = newSocket

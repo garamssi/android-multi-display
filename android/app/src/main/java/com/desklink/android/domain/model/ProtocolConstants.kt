@@ -3,6 +3,11 @@ package com.desklink.android.domain.model
 object ProtocolConstants {
     const val PROTOCOL_VERSION = 1
 
+    // Host the client dials. USB(adb reverse) tunnels the device's loopback to the Mac
+    // server, so USB uses this default; the LAN transport supplies the Mac's IP at
+    // runtime instead. Kept here so the value isn't hardcoded inside the socket client.
+    const val LOOPBACK_HOST = "127.0.0.1"
+
     // Ports
     const val PORT_CONTROL = 7100
     const val PORT_VIDEO = 7101

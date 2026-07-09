@@ -9,6 +9,7 @@ import com.desklink.android.domain.model.ConnectionState
 import com.desklink.android.domain.model.DisplayConfig
 import com.desklink.android.domain.model.MessageType
 import com.desklink.android.domain.model.ProtocolConstants
+import com.desklink.android.domain.transport.Transport
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
@@ -41,9 +42,14 @@ class ConnectionManagerImplTest {
         return hs
     }
 
+    /** USB transport double: always dials loopback (P0 has USB only). */
+    private fun fakeTransport() = object : Transport {
+        override suspend fun host() = "127.0.0.1"
+    }
+
     private fun mockClient(receive: () -> Flow<Pair<Byte, ByteArray>>): TCPClient {
         val client = mockk<TCPClient>(relaxed = true)
-        coEvery { client.connect(any()) } returns Unit
+        coEvery { client.connect(any(), any()) } returns Unit
         coEvery { client.send(any(), any()) } returns Unit
         coEvery { client.disconnect() } returns Unit
         every { client.receivePackets() } answers { receive() }
@@ -61,7 +67,7 @@ class ConnectionManagerImplTest {
                 // then completes; control loop re-collects a fresh (empty) flow
             }
         }
-        val manager = ConnectionManagerImpl(hs, client)
+        val manager = ConnectionManagerImpl(hs, client, fakeTransport())
         manager.managerScope = backgroundScope
 
         manager.connectionState.test {
@@ -84,7 +90,7 @@ class ConnectionManagerImplTest {
         val hs = fakeHandshakeClient()
         // receivePackets never emits -> withTimeout fires.
         val client = mockClient { flow { kotlinx.coroutines.awaitCancellation() } }
-        val manager = ConnectionManagerImpl(hs, client)
+        val manager = ConnectionManagerImpl(hs, client, fakeTransport())
         manager.managerScope = backgroundScope
 
         val job = launch { manager.connect(config) }
@@ -108,7 +114,7 @@ class ConnectionManagerImplTest {
         val client = mockClient {
             flow { emit(MessageType.HANDSHAKE_RESPONSE to ByteArray(0)) }
         }
-        val manager = ConnectionManagerImpl(hs, client)
+        val manager = ConnectionManagerImpl(hs, client, fakeTransport())
         manager.managerScope = backgroundScope
 
         manager.connect(config)
@@ -128,7 +134,7 @@ class ConnectionManagerImplTest {
         val client = mockk<TCPClient>(relaxed = true)
         coEvery { client.send(any(), any()) } returns Unit
         coEvery { client.disconnect() } returns Unit
-        coEvery { client.connect(any()) } answers {
+        coEvery { client.connect(any(), any()) } answers {
             connectCalls++
             // First connect succeeds; every reconnect attempt fails (server gone).
             if (connectCalls >= 2) throw java.io.IOException("no server")
@@ -145,7 +151,7 @@ class ConnectionManagerImplTest {
                 else -> flow<Pair<Byte, ByteArray>> { throw java.io.IOException("lost") }
             }
         }
-        val manager = ConnectionManagerImpl(hs, client)
+        val manager = ConnectionManagerImpl(hs, client, fakeTransport())
         manager.managerScope = backgroundScope
 
         manager.connect(config)
@@ -156,7 +162,7 @@ class ConnectionManagerImplTest {
             manager.connectionState.value,
         )
         // 1 initial connect + RECONNECT_MAX_ATTEMPTS failed reconnects.
-        coVerify(exactly = 1 + ProtocolConstants.RECONNECT_MAX_ATTEMPTS) { client.connect(any()) }
+        coVerify(exactly = 1 + ProtocolConstants.RECONNECT_MAX_ATTEMPTS) { client.connect(any(), any()) }
     }
 
     @Test
@@ -164,7 +170,7 @@ class ConnectionManagerImplTest {
         val hs = fakeHandshakeClient()
         var rxCalls = 0
         val client = mockk<TCPClient>(relaxed = true)
-        coEvery { client.connect(any()) } returns Unit
+        coEvery { client.connect(any(), any()) } returns Unit
         coEvery { client.send(any(), any()) } returns Unit
         coEvery { client.disconnect() } returns Unit
         every { client.receivePackets() } answers {
@@ -176,7 +182,7 @@ class ConnectionManagerImplTest {
                 else -> flow { kotlinx.coroutines.awaitCancellation() } // stay connected
             }
         }
-        val manager = ConnectionManagerImpl(hs, client)
+        val manager = ConnectionManagerImpl(hs, client, fakeTransport())
         manager.managerScope = backgroundScope
 
         manager.connect(config)
@@ -190,7 +196,7 @@ class ConnectionManagerImplTest {
             "expected Connected, got ${manager.connectionState.value}",
         )
         // 1 initial + exactly 1 reconnect attempt (which succeeded).
-        coVerify(exactly = 2) { client.connect(any()) }
+        coVerify(exactly = 2) { client.connect(any(), any()) }
     }
 
     @Test
@@ -200,7 +206,7 @@ class ConnectionManagerImplTest {
         val client = mockk<TCPClient>(relaxed = true)
         coEvery { client.send(any(), any()) } returns Unit
         coEvery { client.disconnect() } returns Unit
-        coEvery { client.connect(any()) } returns Unit
+        coEvery { client.connect(any(), any()) } returns Unit
         every { client.receivePackets() } answers {
             rxCalls++
             when (rxCalls) {
@@ -209,7 +215,7 @@ class ConnectionManagerImplTest {
                 else -> flow { kotlinx.coroutines.awaitCancellation() }
             }
         }
-        val manager = ConnectionManagerImpl(hs, client)
+        val manager = ConnectionManagerImpl(hs, client, fakeTransport())
         manager.managerScope = backgroundScope
 
         manager.connect(config)
@@ -225,7 +231,7 @@ class ConnectionManagerImplTest {
 
         assertEquals(ConnectionState.Disconnected, manager.connectionState.value)
         // Only the initial connect happened; the superseded reconnect never re-attempted.
-        coVerify(exactly = 1) { client.connect(any()) }
+        coVerify(exactly = 1) { client.connect(any(), any()) }
     }
 
     @Test
@@ -235,13 +241,13 @@ class ConnectionManagerImplTest {
         val client = mockk<TCPClient>(relaxed = true)
         coEvery { client.send(any(), any()) } returns Unit
         coEvery { client.disconnect() } returns Unit
-        coEvery { client.connect(any()) } returns Unit
+        coEvery { client.connect(any(), any()) } returns Unit
         // Odd receive = handshake (a connect); even = the post-Connected control loop.
         every { client.receivePackets() } answers {
             rxCalls++
             if (rxCalls % 2 == 1) handshakeSuccessFlow() else flow { kotlinx.coroutines.awaitCancellation() }
         }
-        val manager = ConnectionManagerImpl(hs, client)
+        val manager = ConnectionManagerImpl(hs, client, fakeTransport())
         manager.managerScope = backgroundScope
 
         manager.connect(config)
@@ -256,7 +262,7 @@ class ConnectionManagerImplTest {
         runCurrent()
         assertTrue(manager.connectionState.value is ConnectionState.Connected)
         // Exactly two connects (initial + re-entry) — no stale reconnect adding a third.
-        coVerify(exactly = 2) { client.connect(any()) }
+        coVerify(exactly = 2) { client.connect(any(), any()) }
     }
 
     private fun handshakeSuccessFlow(): Flow<Pair<Byte, ByteArray>> = flow {
