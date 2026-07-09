@@ -6,6 +6,8 @@ import com.desklink.android.data.device.UsbStateMonitorImpl
 import com.desklink.android.data.discovery.NsdPeerDiscovery
 import com.desklink.android.data.input.InputRepositoryImpl
 import com.desklink.android.data.network.ConnectionManagerImpl
+import com.desklink.android.data.settings.SettingsStore
+import com.desklink.android.data.settings.SharedPreferencesSettingsStore
 import com.desklink.android.data.transport.RoutingTransport
 import com.desklink.android.data.video.VideoStreamRepositoryImpl
 import com.desklink.android.domain.repository.ConnectionRepository
@@ -74,4 +76,10 @@ abstract class AppModule {
     abstract fun bindPeerDiscovery(
         impl: NsdPeerDiscovery,
     ): PeerDiscovery
+
+    @Binds
+    @Singleton
+    abstract fun bindSettingsStore(
+        impl: SharedPreferencesSettingsStore,
+    ): SettingsStore
 }

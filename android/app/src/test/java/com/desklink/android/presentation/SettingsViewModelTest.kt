@@ -1,8 +1,10 @@
 package com.desklink.android.presentation
 
+import com.desklink.android.data.FakeSettingsStore
 import com.desklink.android.data.device.ScreenMetricsProvider
 import com.desklink.android.data.device.ScreenResolution
 import com.desklink.android.data.settings.SettingsRepository
+import com.desklink.android.data.settings.SettingsStore
 import com.desklink.android.domain.model.DisplayConfig
 import com.desklink.android.domain.model.TransportMode
 import com.desklink.android.domain.transport.DiscoveredServer
@@ -33,11 +35,16 @@ class SettingsViewModelTest {
 
     private val dispatcher = StandardTestDispatcher()
 
-    private fun repository(nativeWidth: Int = 2560, nativeHeight: Int = 1600) =
+    private fun repository(
+        nativeWidth: Int = 2560,
+        nativeHeight: Int = 1600,
+        store: SettingsStore = FakeSettingsStore(),
+    ) =
         SettingsRepository(
             object : ScreenMetricsProvider {
                 override fun nativeResolution() = ScreenResolution(nativeWidth, nativeHeight)
             },
+            store,
         )
 
     /** PeerDiscovery double emitting a fixed server list. */
@@ -184,6 +191,28 @@ class SettingsViewModelTest {
 
         vm.selectDiscoveredServer(found)
         assertEquals("192.168.0.5", repo.currentManualHost())
+    }
+
+    @Test
+    fun `settings persist across repository instances via the store`() {
+        val store = FakeSettingsStore()
+        val first = repository(store = store)
+        first.setTransportMode(TransportMode.LAN)
+        first.setManualHost("  192.168.0.5  ")
+        first.setScrollSensitivity(5.0f)
+        first.setNaturalScroll(false)
+        first.setResolution(1920, 1200)
+        first.setCodec(DisplayConfig.Codec.H264)
+
+        // New repository, same store == app restart: persisted choices are restored.
+        val restarted = repository(store = store)
+        assertEquals(TransportMode.LAN, restarted.currentTransportMode())
+        assertEquals("192.168.0.5", restarted.currentManualHost())
+        assertEquals(5.0f, restarted.currentScrollSensitivity())
+        assertFalse(restarted.currentNaturalScroll())
+        assertEquals(1920, restarted.current().width)
+        assertEquals(1200, restarted.current().height)
+        assertEquals(DisplayConfig.Codec.H264, restarted.current().codec)
     }
 
     @Test

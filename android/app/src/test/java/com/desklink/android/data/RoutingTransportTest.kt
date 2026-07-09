@@ -25,6 +25,7 @@ class RoutingTransportTest {
         object : ScreenMetricsProvider {
             override fun nativeResolution() = ScreenResolution(2560, 1600)
         },
+        FakeSettingsStore(),
     )
 
     private fun routing(settings: SettingsRepository) =

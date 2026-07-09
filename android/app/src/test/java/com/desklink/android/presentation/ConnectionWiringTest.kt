@@ -1,6 +1,7 @@
 package com.desklink.android.presentation
 
 import app.cash.turbine.test
+import com.desklink.android.data.FakeSettingsStore
 import com.desklink.android.data.device.ScreenMetricsProvider
 import com.desklink.android.data.device.ScreenResolution
 import com.desklink.android.data.settings.SettingsRepository
@@ -44,6 +45,7 @@ class ConnectionWiringTest {
             object : ScreenMetricsProvider {
                 override fun nativeResolution() = ScreenResolution(nativeWidth, nativeHeight)
             },
+            FakeSettingsStore(),
         )
 
     /** A UsbStateMonitor emitting a fixed connectivity value. */

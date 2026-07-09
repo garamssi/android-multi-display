@@ -11,22 +11,24 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * In-memory, process-lifetime holder for the user-selected [DisplayConfig].
+ * Holder for the user-selected [DisplayConfig] and connection/input preferences.
  *
- * Shared (as a Hilt @Singleton) between the Settings screen (which mutates it) and
- * the Connection screen (which reads it to drive [DisplayConfig] into the connect
- * flow), so a selection made in Settings survives navigation back to Connection.
+ * Shared (as a Hilt @Singleton) between the Settings screen (which mutates it) and the
+ * Connection screen (which reads it), so a selection survives navigation. Values are
+ * PERSISTED via [SettingsStore] (SharedPreferences), so they also survive app restarts:
+ * the observable flows are seeded from the store at construction and every setter writes
+ * back. The store is synchronous, so the eager seeding is race-free.
  *
  * The effective default is derived from the device's *real native* screen size (via
- * [ScreenMetricsProvider]) rather than a hardcoded 1920x1200, so out of the box the
- * app requests the panel's full resolution and picks a bitrate to match — fixing the
- * blur caused by the Mac rendering low and the tablet upscaling. The native size is
- * also carried on every config (`nativeWidth`/`nativeHeight`) and preserved across
- * user edits so the handshake can always advertise it.
+ * [ScreenMetricsProvider]) rather than a hardcoded 1920x1200, so out of the box the app
+ * requests the panel's full resolution. Persisted values override the native default when
+ * present; the native size (`nativeWidth`/`nativeHeight`) is always taken from the current
+ * device so a saved config still advertises the right panel size after a device change.
  */
 @Singleton
 class SettingsRepository @Inject constructor(
     screenMetrics: ScreenMetricsProvider,
+    private val store: SettingsStore,
 ) {
     /**
      * The device's native resolution as a fully-formed default config (landscape,
@@ -41,7 +43,9 @@ class SettingsRepository @Inject constructor(
     val nativeWidth: Int get() = nativeConfig.width
     val nativeHeight: Int get() = nativeConfig.height
 
-    private val _config = MutableStateFlow(nativeConfig)
+    // Seeded from the store (falling back to the native-derived default), keeping the
+    // current device's native size via copy().
+    private val _config = MutableStateFlow(loadConfig())
     val config: StateFlow<DisplayConfig> = _config.asStateFlow()
 
     /**
@@ -49,7 +53,8 @@ class SettingsRepository @Inject constructor(
      * BEFORE it is sent to the Mac (so the Mac injects 1:1). A local input preference,
      * not part of the negotiated video [DisplayConfig] / wire protocol.
      */
-    private val _scrollSensitivity = MutableStateFlow(DEFAULT_SCROLL_SENSITIVITY)
+    private val _scrollSensitivity =
+        MutableStateFlow(store.getFloat(KEY_SCROLL_SENSITIVITY, DEFAULT_SCROLL_SENSITIVITY))
     val scrollSensitivity: StateFlow<Float> = _scrollSensitivity.asStateFlow()
 
     /**
@@ -58,7 +63,8 @@ class SettingsRepository @Inject constructor(
      * (content follows the fingers — the macOS default and the current behavior);
      * `false` inverts the delta for traditional/reversed scrolling.
      */
-    private val _naturalScroll = MutableStateFlow(DEFAULT_NATURAL_SCROLL)
+    private val _naturalScroll =
+        MutableStateFlow(store.getBoolean(KEY_NATURAL_SCROLL, DEFAULT_NATURAL_SCROLL))
     val naturalScroll: StateFlow<Boolean> = _naturalScroll.asStateFlow()
 
     /**
@@ -67,36 +73,60 @@ class SettingsRepository @Inject constructor(
      * switches the dial target. LAN is plaintext/dev-only in this phase (see
      * [TransportMode]).
      */
-    private val _transportMode = MutableStateFlow(DEFAULT_TRANSPORT_MODE)
+    private val _transportMode = MutableStateFlow(loadTransportMode())
     val transportMode: StateFlow<TransportMode> = _transportMode.asStateFlow()
 
     /**
-     * The Mac's IP (or hostname) to dial in [TransportMode.LAN], entered manually
-     * (no discovery in this phase). Ignored in USB mode. Blank until the user enters
-     * one; a blank host in LAN mode surfaces as a connection error, not a silent
-     * fallback.
+     * The Mac's IP (or hostname) to dial in [TransportMode.LAN], entered manually or
+     * chosen from discovery. Ignored in USB mode. Blank until set; a blank host in LAN
+     * mode surfaces as a connection error, not a silent fallback.
      */
-    private val _manualHost = MutableStateFlow("")
+    private val _manualHost = MutableStateFlow(store.getString(KEY_MANUAL_HOST, ""))
     val manualHost: StateFlow<String> = _manualHost.asStateFlow()
 
-    fun setResolution(width: Int, height: Int) =
+    fun setResolution(width: Int, height: Int) {
         _config.update { it.copy(width = width, height = height) }
+        store.putInt(KEY_WIDTH, width)
+        store.putInt(KEY_HEIGHT, height)
+    }
 
-    fun setFps(fps: Int) = _config.update { it.copy(fps = fps) }
+    fun setFps(fps: Int) {
+        _config.update { it.copy(fps = fps) }
+        store.putInt(KEY_FPS, fps)
+    }
 
-    fun setBitrate(bitrateKbps: Int) = _config.update { it.copy(bitrateKbps = bitrateKbps) }
+    fun setBitrate(bitrateKbps: Int) {
+        _config.update { it.copy(bitrateKbps = bitrateKbps) }
+        store.putInt(KEY_BITRATE, bitrateKbps)
+    }
 
-    fun setCodec(codec: DisplayConfig.Codec) = _config.update { it.copy(codec = codec) }
+    fun setCodec(codec: DisplayConfig.Codec) {
+        _config.update { it.copy(codec = codec) }
+        store.putString(KEY_CODEC, codec.name)
+    }
 
-    fun setScrollSensitivity(value: Float) =
-        _scrollSensitivity.update { value.coerceIn(MIN_SCROLL_SENSITIVITY, MAX_SCROLL_SENSITIVITY) }
+    fun setScrollSensitivity(value: Float) {
+        val clamped = value.coerceIn(MIN_SCROLL_SENSITIVITY, MAX_SCROLL_SENSITIVITY)
+        _scrollSensitivity.update { clamped }
+        store.putFloat(KEY_SCROLL_SENSITIVITY, clamped)
+    }
 
-    fun setNaturalScroll(enabled: Boolean) = _naturalScroll.update { enabled }
+    fun setNaturalScroll(enabled: Boolean) {
+        _naturalScroll.update { enabled }
+        store.putBoolean(KEY_NATURAL_SCROLL, enabled)
+    }
 
-    fun setTransportMode(mode: TransportMode) = _transportMode.update { mode }
+    fun setTransportMode(mode: TransportMode) {
+        _transportMode.update { mode }
+        store.putString(KEY_TRANSPORT_MODE, mode.name)
+    }
 
     /** Stores the manual LAN host, trimmed (surrounding whitespace is never a valid host). */
-    fun setManualHost(value: String) = _manualHost.update { value.trim() }
+    fun setManualHost(value: String) {
+        val trimmed = value.trim()
+        _manualHost.update { trimmed }
+        store.putString(KEY_MANUAL_HOST, trimmed)
+    }
 
     fun current(): DisplayConfig = _config.value
 
@@ -108,6 +138,21 @@ class SettingsRepository @Inject constructor(
 
     fun currentManualHost(): String = _manualHost.value
 
+    // --- Seeding from the store ---
+
+    private fun loadConfig(): DisplayConfig = nativeConfig.copy(
+        width = store.getInt(KEY_WIDTH, nativeConfig.width),
+        height = store.getInt(KEY_HEIGHT, nativeConfig.height),
+        fps = store.getInt(KEY_FPS, nativeConfig.fps),
+        bitrateKbps = store.getInt(KEY_BITRATE, nativeConfig.bitrateKbps),
+        codec = runCatching { DisplayConfig.Codec.valueOf(store.getString(KEY_CODEC, nativeConfig.codec.name)) }
+            .getOrDefault(nativeConfig.codec),
+    )
+
+    private fun loadTransportMode(): TransportMode =
+        runCatching { TransportMode.valueOf(store.getString(KEY_TRANSPORT_MODE, DEFAULT_TRANSPORT_MODE.name)) }
+            .getOrDefault(DEFAULT_TRANSPORT_MODE)
+
     companion object {
         const val MIN_SCROLL_SENSITIVITY = 1.0f
         const val MAX_SCROLL_SENSITIVITY = 6.0f
@@ -117,5 +162,15 @@ class SettingsRepository @Inject constructor(
         const val DEFAULT_NATURAL_SCROLL = true
         /** USB is the default and only secure transport today; LAN is opt-in. */
         val DEFAULT_TRANSPORT_MODE = TransportMode.USB
+
+        private const val KEY_WIDTH = "width"
+        private const val KEY_HEIGHT = "height"
+        private const val KEY_FPS = "fps"
+        private const val KEY_BITRATE = "bitrateKbps"
+        private const val KEY_CODEC = "codec"
+        private const val KEY_SCROLL_SENSITIVITY = "scrollSensitivity"
+        private const val KEY_NATURAL_SCROLL = "naturalScroll"
+        private const val KEY_TRANSPORT_MODE = "transportMode"
+        private const val KEY_MANUAL_HOST = "manualHost"
     }
 }
