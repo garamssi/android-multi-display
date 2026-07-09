@@ -1,7 +1,6 @@
 # WiFi 전송 아키텍처 & 구현 플랜
 
-USB(adb reverse)에 더해 같은 네트워크(WiFi/LAN)로도 연결되게 하는 상세 설계.
-`docs/WIFI_TRANSPORT_ROADMAP.md`의 상위 로드맵을 구체화한 "정본 설계 문서"다.
+USB(adb reverse)에 더해 같은 네트워크(WiFi/LAN)로도 연결되게 하는 상세 설계이자 정본 문서다.
 
 가드레일(`CLAUDE.md`) 준수: 근본 원인 우선, 클린 아키텍처(전송/보안은 data 계층 추상 뒤),
 클린 코드(전송 종류를 상위에 흩뿌리지 않음), TDD(Red→Green→Refactor), 와이어 변경 시
