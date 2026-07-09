@@ -191,7 +191,10 @@ WiFi는 IP 변동/로밍 특성이 있다. 방금 하드닝한 `ConnectionManage
 
 각 단계는 독립적으로 빌드/테스트되며 USB 회귀가 없어야 한다.
 
-> 구현 현황: P0·P1 완료(빌드 대기). 단순화를 위해 P0/P1의 `Transport`는
+> 구현 현황: P0·P1·P2 완료(빌드/기기 검증 대기). P2 자동 발견은 맥이 컨트롤 채널을
+> `_desklink._tcp`로 광고하고, 안드로이드가 `NsdManager`로 발견→선택 시 수동 IP 필드를
+>채우는 방식(런타임 권한 `NEARBY_WIFI_DEVICES` 게이트, 멀티캐스트 락). mDNS 실동작은
+> 기기별 편차가 있어 온-디바이스 검증이 필요하다. 단순화를 위해 P0/P1의 `Transport`는
 > `suspend fun host(): String`만 노출하고, `ConnectionTarget`/`SecurityMode`/
 > `SecureChannel`(보안 분리)은 실제로 필요해지는 P3에서 도입한다(현 단계 LAN은 평문
 > 개발 전용이라 보안 타입을 미리 만드는 것은 근거 없는 추상화이므로 미룬다). 안드로이드는
@@ -213,7 +216,7 @@ WiFi는 IP 변동/로밍 특성이 있다. 방금 하드닝한 `ConnectionManage
 - TDD: 주소 파싱/`Transport` 선택 단위 테스트.
 - DoD: 같은 WiFi에서 수동 IP로 미러링. USB 회귀 없음. 평문 경고 노출.
 
-### P2 — 자동 디스커버리 (Bonjour / NsdManager)
+### P2 — 자동 디스커버리 (Bonjour / NsdManager)  ✔ 완료(기기 검증 대기)
 - 목표: 맥을 자동 발견.
 - 변경: 맥 `BonjourAdvertiser`(`_desklink._tcp`); 안드로이드 `NsdPeerDiscovery`(권한 또는 PICKER);
   UI 기기 목록.
