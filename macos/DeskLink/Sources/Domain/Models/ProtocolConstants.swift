@@ -24,6 +24,13 @@ public enum ProtocolConstants {
     public static let pskIdentity = "desklink"
     public static let pairingPinLength = 6
 
+    // LAN mutual-auth challenge-response (P3). proof = HMAC-SHA256(pairingKey,
+    // context || serverNonce || clientNonce); contexts distinguish the two directions.
+    // Golden vectors: tools/protocol_vectors.py (AUTH_*).
+    public static let authNonceLength = 16
+    public static let authClientContext = "desklink-auth-client"
+    public static let authServerContext = "desklink-auth-server"
+
     // Packet limits
     public static let maxPacketSize = 4 * 1024 * 1024 // 4MB
 

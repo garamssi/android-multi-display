@@ -62,6 +62,29 @@ adb reverse tcp:7102 tcp:7102   # Input
 | 0x0A | DISCONNECT | 양방향 | 정상 종료 |
 | 0x0B | BITRATE_UPDATE | Server → Client | 비트레이트 변경 통보 |
 | 0x0C | CONFIG_UPDATE | 양방향 | 스트림 중 설정 변경 요청 |
+| 0x0D | AUTH_CHALLENGE | Server → Client | LAN 인증: 서버 nonce (TLS 내부, USB는 미사용) |
+| 0x0E | AUTH_RESPONSE | Client → Server | LAN 인증: 클라이언트 nonce + 증명 |
+| 0x0F | AUTH_CONFIRM | Server → Client | LAN 인증: 서버 증명 |
+
+### 3.1a LAN 상호 인증 (0x0D–0x0F, WiFi 전용)
+
+USB(loopback)에는 적용하지 않는다. WiFi(LAN)에서 TLS 채널이 맺어진 뒤, 핸드셰이크
+(0x01) 앞단에 PIN 기반 상호 인증을 수행한다. 페어링 키 `K = HKDF-SHA256(PIN)`
+(§pairing_vectors.py)를 양쪽이 보유하며, PIN/키 자체는 전송하지 않는다.
+
+증명 = `HMAC-SHA256(K, context || serverNonce || clientNonce)`. 방향별 context로
+역방향 재사용을 차단한다:
+- 클라이언트: `"desklink-auth-client"`
+- 서버: `"desklink-auth-server"`
+
+흐름:
+1. Server → **AUTH_CHALLENGE**: `serverNonce`(16B 랜덤).
+2. Client → **AUTH_RESPONSE**: `clientNonce`(16B) + `clientProof`(32B).
+3. Server가 `clientProof` 검증(상수 시간). 실패 시 연결 종료 + 실패 카운트 증가(잠금).
+4. Server → **AUTH_CONFIRM**: `serverProof`(32B). Client가 검증 후 핸드셰이크로 진행.
+
+3자(Python/Swift/Kotlin) 골든 벡터는 `tools/protocol_vectors.py`의 `AUTH_*`에 있으며
+"ALL CHECKS PASS"를 유지한다. 프레이밍은 공통 `[len u32 BE][type u8][payload]` 그대로다.
 
 ### 3.2 핸드셰이크 흐름
 

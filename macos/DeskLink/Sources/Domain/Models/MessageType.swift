@@ -14,6 +14,10 @@ public enum MessageType: UInt8, Sendable {
     case disconnect = 0x0A
     case bitrateUpdate = 0x0B
     case configUpdate = 0x0C
+    // LAN mutual authentication (P3): challenge-response keyed by HKDF(PIN), inside TLS.
+    case authChallenge = 0x0D
+    case authResponse = 0x0E
+    case authConfirm = 0x0F
 
     // Video channel (0x10-0x1F)
     case videoFrame = 0x10

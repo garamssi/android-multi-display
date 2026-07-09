@@ -14,6 +14,10 @@ object MessageType {
     const val DISCONNECT: Byte = 0x0A
     const val BITRATE_UPDATE: Byte = 0x0B
     const val CONFIG_UPDATE: Byte = 0x0C
+    // LAN mutual authentication (P3): challenge-response keyed by HKDF(PIN), inside TLS.
+    const val AUTH_CHALLENGE: Byte = 0x0D
+    const val AUTH_RESPONSE: Byte = 0x0E
+    const val AUTH_CONFIRM: Byte = 0x0F
 
     // Video channel (0x10-0x1F)
     const val VIDEO_FRAME: Byte = 0x10

@@ -31,6 +31,13 @@ object ProtocolConstants {
     const val PSK_IDENTITY = "desklink"
     const val PAIRING_PIN_LENGTH = 6
 
+    // LAN mutual-auth challenge-response (P3). proof = HMAC-SHA256(pairingKey,
+    // context || serverNonce || clientNonce); contexts distinguish the two directions.
+    // Golden vectors: tools/protocol_vectors.py (AUTH_*).
+    const val AUTH_NONCE_LENGTH = 16
+    const val AUTH_CLIENT_CONTEXT = "desklink-auth-client"
+    const val AUTH_SERVER_CONTEXT = "desklink-auth-server"
+
     // Packet limits
     const val MAX_PACKET_SIZE = 4 * 1024 * 1024 // 4MB
 

@@ -82,6 +82,45 @@ check("VIDEO_CONFIG", vc, None)
 ping = struct.pack(">q", 1700000000000)
 check("PING(i64 ms)", ping, None)
 
+# ---- LAN mutual auth (P3): challenge-response over TLS, keyed by HKDF(PIN) ----
+# AUTH_CHALLENGE(0x0D): serverNonce(16). AUTH_RESPONSE(0x0E): clientNonce(16)+clientProof(32).
+# AUTH_CONFIRM(0x0F): serverProof(32). proof = HMAC-SHA256(K, context || serverNonce || clientNonce),
+# K = HKDF(PIN) (see pairing_vectors.py). Fixed PIN/nonces below make the proofs deterministic.
+import os as _os
+import sys as _sys
+import hmac as _hmac
+import hashlib as _hashlib
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+from pairing_vectors import derive_psk as _derive_psk
+
+def _hmac256(key: bytes, msg: bytes) -> bytes:
+    return _hmac.new(key, msg, _hashlib.sha256).digest()
+
+AUTH_K = _derive_psk("123456")
+AUTH_SNONCE = bytes(range(0, 16))     # 000102...0F
+AUTH_CNONCE = bytes(range(16, 32))    # 101112...1F
+client_proof = _hmac256(AUTH_K, b"desklink-auth-client" + AUTH_SNONCE + AUTH_CNONCE)
+server_proof = _hmac256(AUTH_K, b"desklink-auth-server" + AUTH_SNONCE + AUTH_CNONCE)
+
+auth_challenge = AUTH_SNONCE
+check("AUTH_CHALLENGE(16B)", auth_challenge, "000102030405060708090A0B0C0D0E0F")
+assert len(auth_challenge) == 16
+check("FRAMED_AUTH_CHALLENGE", frame(0x0D, auth_challenge), None)
+
+auth_response = AUTH_CNONCE + client_proof
+check("AUTH_RESPONSE(48B)", auth_response,
+      "101112131415161718191A1B1C1D1E1F625675E556C49C7C3D7696FC998AF1A1B08E566770ADE8535BCE854F70A197C7")
+assert len(auth_response) == 48
+check("FRAMED_AUTH_RESPONSE", frame(0x0E, auth_response),
+      "000000310E101112131415161718191A1B1C1D1E1F625675E556C49C7C3D7696FC998AF1A1B08E566770ADE8535BCE854F70A197C7")
+
+auth_confirm = server_proof
+check("AUTH_CONFIRM(32B)", auth_confirm,
+      "021DEF164DBF188F2C926FD01EE7063C26DD682113F7A561D027CEE5D34C38E8")
+assert len(auth_confirm) == 32
+check("FRAMED_AUTH_CONFIRM", frame(0x0F, auth_confirm),
+      "000000210F021DEF164DBF188F2C926FD01EE7063C26DD682113F7A561D027CEE5D34C38E8")
+
 # ---- Round-trip decode ----
 print("\n=== Round-trip decode ===")
 action, x, y, pressure, pid, ts = struct.unpack(">B f f H B q", t)
