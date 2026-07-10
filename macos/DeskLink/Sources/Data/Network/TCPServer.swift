@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import Security
 
 /// TCP server for streaming data to (and receiving bytes from) an Android client.
 /// The listener binds either loopback only (USB via `adb reverse`) or all interfaces
@@ -65,22 +66,29 @@ public final class TCPServer: StreamServing, PacketReceiving, @unchecked Sendabl
 
     public func start(port: UInt16, scope: ListenerScope) async throws {
         try lock.withLock {
-            let params = NWParameters.tcp
+            let tcpOptions = NWProtocolTCP.Options()
+            tcpOptions.noDelay = true
+
+            let params: NWParameters
             switch scope {
             case .loopback:
-                // localhost only — reachable via the adb reverse tunnel (USB).
+                // localhost only — reachable via the adb reverse tunnel (USB). Plaintext.
+                params = NWParameters(tls: nil, tcp: tcpOptions)
                 params.requiredInterfaceType = .loopback
             case .localNetwork:
-                // Bind all interfaces so the one listener serves both the adb-reverse
-                // loopback path (USB) AND direct LAN clients. Leaving requiredInterfaceType
-                // unset means "any interface". Plaintext/unauthenticated — opt-in only
-                // (see docs/WIFI_TRANSPORT_DESIGN.md).
-                break
-            }
-
-            // Set TCP_NODELAY
-            if let tcpOptions = params.defaultProtocolStack.transportProtocol as? NWProtocolTCP.Options {
-                tcpOptions.noDelay = true
+                // Bind all interfaces (loopback included, so USB still works) and serve
+                // TLS with the self-signed identity from scripts/create_tls_cert.sh. If
+                // the identity is missing, fall back to plaintext and log a hint rather
+                // than failing to bind.
+                if let identity = TlsIdentity.loadSecIdentity() {
+                    let tls = NWProtocolTLS.Options()
+                    sec_protocol_options_set_local_identity(tls.securityProtocolOptions, identity)
+                    params = NWParameters(tls: tls, tcp: tcpOptions)
+                    Log.info(.server, "LAN listener: TLS enabled")
+                } else {
+                    params = NWParameters(tls: nil, tcp: tcpOptions)
+                    Log.error(.server, "LAN TLS identity not found — run scripts/create_tls_cert.sh. Serving PLAINTEXT.")
+                }
             }
 
             let nwPort = NWEndpoint.Port(rawValue: port)!
