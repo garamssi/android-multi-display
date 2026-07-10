@@ -82,6 +82,7 @@ fun SettingsScreen(
 ) {
     val state by viewModel.uiState.collectAsState()
     val discoveredServers by viewModel.discoveredServers.collectAsState()
+    val pairingPin by viewModel.pairingPin.collectAsState()
 
     // Resolution options are DERIVED from the detected native panel size: "Native"
     // first, then standard presets that are <= native (capped at native), with any
@@ -145,9 +146,11 @@ fun SettingsScreen(
                     ConnectionSection(
                         transportMode = state.transportMode,
                         manualHost = state.manualHost,
+                        pairingPin = pairingPin,
                         discoveredServers = discoveredServers,
                         onSelectMode = viewModel::setTransportMode,
                         onManualHostChange = viewModel::setManualHost,
+                        onPairingPinChange = viewModel::setPairingPin,
                         onStartDiscovery = viewModel::startDiscovery,
                         onStopDiscovery = viewModel::stopDiscovery,
                         onSelectServer = viewModel::selectDiscoveredServer,
@@ -408,9 +411,11 @@ private fun StreamColumn(
 private fun ConnectionSection(
     transportMode: TransportMode,
     manualHost: String,
+    pairingPin: String,
     discoveredServers: List<DiscoveredServer>,
     onSelectMode: (TransportMode) -> Unit,
     onManualHostChange: (String) -> Unit,
+    onPairingPinChange: (String) -> Unit,
     onStartDiscovery: () -> Unit,
     onStopDiscovery: () -> Unit,
     onSelectServer: (DiscoveredServer) -> Unit,
@@ -431,6 +436,8 @@ private fun ConnectionSection(
         if (transportMode == TransportMode.LAN) {
             Spacer(Modifier.height(14.dp))
             MacIpField(value = manualHost, onValueChange = onManualHostChange)
+            Spacer(Modifier.height(10.dp))
+            PairingPinField(value = pairingPin, onValueChange = onPairingPinChange)
             Spacer(Modifier.height(14.dp))
             DiscoverySection(
                 servers = discoveredServers,
@@ -440,9 +447,9 @@ private fun ConnectionSection(
             )
             Spacer(Modifier.height(12.dp))
             WarningNote(
-                text = "Wi-Fi is experimental and unencrypted. Anyone on this network " +
-                    "can view and control your Mac while connected. Use only on a " +
-                    "trusted private network — USB stays the secure default.",
+                text = "Wi-Fi is experimental. Traffic is encrypted (TLS); enter the " +
+                    "pairing PIN shown on the Mac and use only on a trusted network. " +
+                    "USB stays the default.",
             )
         }
     }
@@ -557,6 +564,47 @@ private fun MacIpField(value: String, onValueChange: (String) -> Unit) {
                     if (value.isEmpty()) {
                         Text(
                             text = "Mac IP address (e.g. 192.168.0.10)",
+                            color = DeskLinkTokens.TextQuaternary,
+                            fontFamily = PlexSans,
+                            fontSize = 15.sp,
+                        )
+                    }
+                    innerTextField()
+                }
+            }
+        },
+    )
+}
+
+/** Numeric pairing-PIN entry for LAN mode (the Mac shows the PIN in its Settings). */
+@Composable
+private fun PairingPinField(value: String, onValueChange: (String) -> Unit) {
+    BasicTextField(
+        value = value,
+        onValueChange = onValueChange,
+        singleLine = true,
+        textStyle = TextStyle(
+            color = DeskLinkTokens.TextPrimary,
+            fontFamily = PlexSans,
+            fontSize = 15.sp,
+        ),
+        cursorBrush = SolidColor(DeskLinkTokens.AccentLight),
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+        modifier = Modifier.fillMaxWidth(),
+        decorationBox = { innerTextField ->
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(DeskLinkTokens.ShapeChip)
+                    .background(color = DeskLinkTokens.Surface03, shape = DeskLinkTokens.ShapeChip)
+                    .border(BorderStroke(1.dp, DeskLinkTokens.Border10), DeskLinkTokens.ShapeChip)
+                    .padding(horizontal = 14.dp, vertical = 13.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(modifier = Modifier.weight(1f)) {
+                    if (value.isEmpty()) {
+                        Text(
+                            text = "Pairing PIN shown on the Mac (Settings → Connection)",
                             color = DeskLinkTokens.TextQuaternary,
                             fontFamily = PlexSans,
                             fontSize = 15.sp,

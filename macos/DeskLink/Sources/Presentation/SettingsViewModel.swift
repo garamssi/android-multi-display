@@ -40,6 +40,14 @@ public final class SettingsViewModel {
         set { Log.isVerbose = newValue }
     }
 
+    /// The pairing PIN to show for LAN auth (stable; the tablet enters it once to pair).
+    public var pairingPin: String { PairingPin.current }
+
+    /// Generates a fresh pairing PIN (invalidates any prior pairing).
+    public func regeneratePairingPin() {
+        PairingPin.regenerate()
+    }
+
     /// The "Allow Wi-Fi (LAN) connections" opt-in. Held as an observed stored property
     /// (so toggling it re-renders the dependent detail UI immediately) and persisted to
     /// [TransportSettings.wifiEnabled] on change. Read by the server at Start, so a

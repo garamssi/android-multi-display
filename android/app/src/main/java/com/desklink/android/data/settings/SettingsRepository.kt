@@ -2,6 +2,7 @@ package com.desklink.android.data.settings
 
 import com.desklink.android.data.device.ScreenMetricsProvider
 import com.desklink.android.domain.model.DisplayConfig
+import com.desklink.android.domain.model.ProtocolConstants
 import com.desklink.android.domain.model.TransportMode
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -84,6 +85,14 @@ class SettingsRepository @Inject constructor(
     private val _manualHost = MutableStateFlow(store.getString(KEY_MANUAL_HOST, ""))
     val manualHost: StateFlow<String> = _manualHost.asStateFlow()
 
+    /**
+     * The pairing PIN shown by the Mac, entered here to authenticate the LAN (Wi-Fi)
+     * connection. Both sides derive the same key from it (see PairingCrypto); the PIN
+     * itself is never sent. Ignored in USB mode. Empty until entered.
+     */
+    private val _pairingPin = MutableStateFlow(store.getString(KEY_PAIRING_PIN, ""))
+    val pairingPin: StateFlow<String> = _pairingPin.asStateFlow()
+
     fun setResolution(width: Int, height: Int) {
         _config.update { it.copy(width = width, height = height) }
         store.putInt(KEY_WIDTH, width)
@@ -128,6 +137,13 @@ class SettingsRepository @Inject constructor(
         store.putString(KEY_MANUAL_HOST, trimmed)
     }
 
+    /** Stores the pairing PIN, keeping only digits (the Mac shows a 6-digit numeric PIN). */
+    fun setPairingPin(value: String) {
+        val digits = value.filter { it.isDigit() }.take(ProtocolConstants.PAIRING_PIN_LENGTH)
+        _pairingPin.update { digits }
+        store.putString(KEY_PAIRING_PIN, digits)
+    }
+
     fun current(): DisplayConfig = _config.value
 
     fun currentScrollSensitivity(): Float = _scrollSensitivity.value
@@ -137,6 +153,8 @@ class SettingsRepository @Inject constructor(
     fun currentTransportMode(): TransportMode = _transportMode.value
 
     fun currentManualHost(): String = _manualHost.value
+
+    fun currentPairingPin(): String = _pairingPin.value
 
     // --- Seeding from the store ---
 
@@ -172,5 +190,6 @@ class SettingsRepository @Inject constructor(
         private const val KEY_NATURAL_SCROLL = "naturalScroll"
         private const val KEY_TRANSPORT_MODE = "transportMode"
         private const val KEY_MANUAL_HOST = "manualHost"
+        private const val KEY_PAIRING_PIN = "pairingPin"
     }
 }

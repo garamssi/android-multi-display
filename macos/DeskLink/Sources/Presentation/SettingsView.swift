@@ -173,13 +173,25 @@ struct SettingsView: View {
                     .foregroundStyle(DesignTokens.textTertiary)
             }
 
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Pairing PIN")
+                    .font(.plexSans(size: 12, weight: .medium))
+                    .foregroundStyle(DesignTokens.textSecondary)
+                Text(viewModel.pairingPin)
+                    .font(.plexMono(size: 22, weight: .semibold))
+                    .foregroundStyle(DesignTokens.textPrimary)
+                    .textSelection(.enabled)
+                Text("Enter this PIN on the tablet to pair. It authenticates the connection.")
+                    .font(.plexSans(size: 11))
+                    .foregroundStyle(DesignTokens.textTertiary)
+            }
+
             HStack(alignment: .top, spacing: 8) {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .foregroundStyle(DesignTokens.warningAmber)
                     .font(.system(size: 12))
-                Text("Wi-Fi is experimental and unencrypted. Anyone on this network can "
-                    + "view and control your Mac while connected. Use only on a trusted "
-                    + "private network — USB stays the secure default.")
+                Text("Wi-Fi is experimental. Traffic is encrypted (TLS); pair with the PIN "
+                    + "above and use only on a trusted network. USB stays the default.")
                     .font(.plexSans(size: 12))
                     .foregroundStyle(DesignTokens.textSecondary)
                     // In an HStack a long Text truncates to one line unless it is told to

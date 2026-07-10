@@ -216,6 +216,18 @@ class SettingsViewModelTest {
     }
 
     @Test
+    fun `setPairingPin keeps only digits capped at the PIN length and persists`() {
+        val store = FakeSettingsStore()
+        val repo = repository(store = store)
+
+        repo.setPairingPin("12ab34-56789")
+
+        assertEquals("123456", repo.currentPairingPin()) // digits only, capped at 6
+        // Survives a restart (new repository, same store).
+        assertEquals("123456", repository(store = store).currentPairingPin())
+    }
+
+    @Test
     fun `stopDiscovery clears the discovered list`() = runTest {
         val vm = viewModel(discovery = FakeDiscovery(flowOf(listOf(
             DiscoveredServer("Mac", "10.0.0.2", 7100),

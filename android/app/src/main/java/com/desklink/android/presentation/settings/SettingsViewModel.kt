@@ -30,6 +30,9 @@ class SettingsViewModel @Inject constructor(
     private val peerDiscovery: PeerDiscovery,
 ) : ViewModel() {
 
+    /** The pairing PIN entered for LAN auth (exposed separately from [uiState]). */
+    val pairingPin: StateFlow<String> = settingsRepository.pairingPin
+
     /** Servers discovered on the LAN (empty until [startDiscovery] runs). */
     private val _discoveredServers = MutableStateFlow<List<DiscoveredServer>>(emptyList())
     val discoveredServers: StateFlow<List<DiscoveredServer>> = _discoveredServers.asStateFlow()
@@ -75,6 +78,8 @@ class SettingsViewModel @Inject constructor(
     fun setTransportMode(mode: TransportMode) = settingsRepository.setTransportMode(mode)
 
     fun setManualHost(value: String) = settingsRepository.setManualHost(value)
+
+    fun setPairingPin(value: String) = settingsRepository.setPairingPin(value)
 
     /** Begins LAN discovery (call only after the Wi-Fi permission is granted). Idempotent. */
     fun startDiscovery() {
