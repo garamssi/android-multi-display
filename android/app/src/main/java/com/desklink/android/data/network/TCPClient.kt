@@ -1,5 +1,6 @@
 package com.desklink.android.data.network
 
+import com.desklink.android.data.security.SecureChannel
 import com.desklink.android.domain.model.ProtocolConstants
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
@@ -30,8 +31,14 @@ class PacketFramingException(message: String) : IOException(message)
  * [com.desklink.android.domain.transport.Transport]): USB dials the device's loopback
  * (`127.0.0.1`), which ADB reverse-tunnels to the Mac; a LAN transport supplies the
  * Mac's IP. This client is transport-agnostic — it just dials `host:port`.
+ *
+ * After connecting, the raw socket is handed to the injected [SecureChannel]: USB returns
+ * it unchanged (plaintext); LAN wraps it in TLS. All framing then runs over the returned
+ * socket's streams, unaware of which it got.
  */
-class TCPClient @Inject constructor() {
+class TCPClient @Inject constructor(
+    private val secureChannel: SecureChannel,
+) {
     private var socket: Socket? = null
     private var outputStream: OutputStream? = null
 
@@ -51,8 +58,12 @@ class TCPClient @Inject constructor() {
                 InetSocketAddress(host, port),
                 ProtocolConstants.HANDSHAKE_TIMEOUT.toInt()
             )
-            socket = newSocket
-            outputStream = newSocket.getOutputStream()
+            // Wrap with the channel's security (plaintext for USB, TLS for LAN). The
+            // returned socket may be an SSLSocket layered over newSocket; closing it in
+            // disconnect() closes the underlying socket too.
+            val secured = secureChannel.secure(newSocket, host, port)
+            socket = secured
+            outputStream = secured.getOutputStream()
         } catch (e: Exception) {
             // Never leak a half-open socket on a failed connect (A-H3).
             try {

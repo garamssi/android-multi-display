@@ -6,6 +6,8 @@ import com.desklink.android.data.device.UsbStateMonitorImpl
 import com.desklink.android.data.discovery.NsdPeerDiscovery
 import com.desklink.android.data.input.InputRepositoryImpl
 import com.desklink.android.data.network.ConnectionManagerImpl
+import com.desklink.android.data.security.PlaintextSecureChannel
+import com.desklink.android.data.security.SecureChannel
 import com.desklink.android.data.settings.SettingsStore
 import com.desklink.android.data.settings.SharedPreferencesSettingsStore
 import com.desklink.android.data.transport.RoutingTransport
@@ -82,4 +84,11 @@ abstract class AppModule {
     abstract fun bindSettingsStore(
         impl: SharedPreferencesSettingsStore,
     ): SettingsStore
+
+    // Plaintext today (USB, and LAN until the TLS channel lands in the next phase).
+    @Binds
+    @Singleton
+    abstract fun bindSecureChannel(
+        impl: PlaintextSecureChannel,
+    ): SecureChannel
 }

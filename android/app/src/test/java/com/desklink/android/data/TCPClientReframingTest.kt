@@ -3,6 +3,7 @@ package com.desklink.android.data
 import com.desklink.android.data.network.PacketFramer
 import com.desklink.android.data.network.PacketFramingException
 import com.desklink.android.data.network.TCPClient
+import com.desklink.android.data.security.PlaintextSecureChannel
 import com.desklink.android.domain.model.MessageType
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
@@ -35,7 +36,7 @@ class TCPClientReframingTest {
         val p3 = PacketFramer.frame(MessageType.VIDEO_FRAME, ByteArray(200) { it.toByte() })
         val stream = ChunkedInputStream(p1 + p2 + p3, chunk = 1)
 
-        val packets = TCPClient().framedPackets(stream).toList()
+        val packets = TCPClient(PlaintextSecureChannel()).framedPackets(stream).toList()
 
         assertEquals(3, packets.size)
         assertEquals(MessageType.PING, packets[0].first)
@@ -54,7 +55,7 @@ class TCPClientReframingTest {
         val packet = PacketFramer.frame(MessageType.VIDEO_FRAME, bigPayload)
         val stream = ChunkedInputStream(packet, chunk = 7000)
 
-        val packets = TCPClient().framedPackets(stream).toList()
+        val packets = TCPClient(PlaintextSecureChannel()).framedPackets(stream).toList()
 
         assertEquals(1, packets.size)
         assertEquals(MessageType.VIDEO_FRAME, packets[0].first)
@@ -72,7 +73,7 @@ class TCPClientReframingTest {
         val combined = frames.reduce { acc, bytes -> acc + bytes }
         val stream = ChunkedInputStream(combined, chunk = 333)
 
-        val packets = TCPClient().framedPackets(stream).toList()
+        val packets = TCPClient(PlaintextSecureChannel()).framedPackets(stream).toList()
 
         assertEquals(4, packets.size)
         assertEquals(MessageType.PING, packets[0].first)
@@ -91,7 +92,7 @@ class TCPClientReframingTest {
         val badHeader = byteArrayOf(0x00, 0x00, 0x00, 0x00, 0x07)
         val stream = ChunkedInputStream(badHeader, chunk = 5)
 
-        val thrown = runCatching { TCPClient().framedPackets(stream).toList() }.exceptionOrNull()
+        val thrown = runCatching { TCPClient(PlaintextSecureChannel()).framedPackets(stream).toList() }.exceptionOrNull()
         assertTrue(
             thrown is PacketFramingException,
             "expected PacketFramingException, got $thrown",
