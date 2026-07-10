@@ -7,6 +7,8 @@ import com.desklink.android.data.device.ScreenResolution
 import com.desklink.android.data.settings.SettingsRepository
 import com.desklink.android.domain.model.DisplayConfig
 import com.desklink.android.domain.repository.UsbStateMonitor
+import com.desklink.android.domain.transport.DiscoveredServer
+import com.desklink.android.domain.transport.PeerDiscovery
 import com.desklink.android.domain.usecase.ConnectToServerUseCase
 import com.desklink.android.presentation.connection.ConnectionViewModel
 import io.mockk.coVerify
@@ -51,6 +53,11 @@ class ConnectionWiringTest {
     /** A UsbStateMonitor emitting a fixed connectivity value. */
     private fun usbMonitor(connected: Boolean = false) = object : UsbStateMonitor {
         override fun usbConnected(): Flow<Boolean> = flowOf(connected)
+    }
+
+    /** A no-op PeerDiscovery (LAN discovery is not exercised by these USB-path tests). */
+    private fun discovery() = object : PeerDiscovery {
+        override fun servers(): Flow<List<DiscoveredServer>> = flowOf(emptyList())
     }
 
     @BeforeEach
@@ -101,7 +108,7 @@ class ConnectionWiringTest {
                 MutableStateFlow<ConnectionState>(ConnectionState.Disconnected)
             coEvery { useCase.connect(any()) } returns Unit
 
-            val vm = ConnectionViewModel(useCase, repo, usbMonitor())
+            val vm = ConnectionViewModel(useCase, repo, discovery(), usbMonitor())
             vm.connect()
             advanceUntilIdle()
 
@@ -124,7 +131,7 @@ class ConnectionWiringTest {
         every { useCase.connectionState } returns
             MutableStateFlow<ConnectionState>(ConnectionState.Disconnected)
 
-        val vm = ConnectionViewModel(useCase, repo(), usbMonitor(connected = true))
+        val vm = ConnectionViewModel(useCase, repo(), discovery(), usbMonitor(connected = true))
 
         vm.usbConnected.test {
             assertEquals(false, awaitItem()) // stateIn initial value

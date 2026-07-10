@@ -1,7 +1,14 @@
 package com.desklink.android.presentation.connection
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -9,12 +16,15 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Cable
 import androidx.compose.material.icons.outlined.Refresh
@@ -22,6 +32,7 @@ import androidx.compose.material.icons.outlined.WarningAmber
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -32,14 +43,18 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.desklink.android.domain.model.ConnectionState
 import com.desklink.android.domain.model.DisplayConfig
+import com.desklink.android.domain.model.TransportMode
+import com.desklink.android.domain.transport.DiscoveredServer
 import com.desklink.android.presentation.components.AppGlyph
 import com.desklink.android.presentation.components.GhostTextButton
 import com.desklink.android.presentation.components.GradientButton
@@ -59,6 +74,8 @@ fun ConnectionScreen(
 ) {
     val state by viewModel.connectionState.collectAsStateWithLifecycle()
     val usbConnected by viewModel.usbConnected.collectAsStateWithLifecycle()
+    val transportMode by viewModel.transportMode.collectAsStateWithLifecycle()
+    val discoveredServers by viewModel.discoveredServers.collectAsStateWithLifecycle()
 
     // Only navigate to Display in response to a Connect the user initiated here.
     // Without this, returning to this screen while the control channel is still
@@ -113,11 +130,26 @@ fun ConnectionScreen(
                 isError -> ErrorContent(
                     modifier = Modifier.align(Alignment.Center),
                     errorCode = (state as ConnectionState.Error).error.name,
+                    transportMode = transportMode,
                     onTryAgain = {
                         connectRequested = true
                         viewModel.connect()
                     },
                     onOpenSettings = onSettings,
+                )
+
+                transportMode == TransportMode.LAN -> WifiDiscoveryContent(
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .fillMaxSize(),
+                    servers = discoveredServers,
+                    onStartDiscovery = viewModel::startDiscovery,
+                    onStopDiscovery = viewModel::stopDiscovery,
+                    onConnectServer = {
+                        connectRequested = true
+                        viewModel.connectTo(it)
+                    },
+                    onSettings = onSettings,
                 )
 
                 else -> {
@@ -186,6 +218,134 @@ private fun StartContent(
     }
 }
 
+/**
+ * Wi-Fi home flow: browse for Macs advertised on the LAN and tap one to connect. Handles
+ * the NEARBY_WIFI_DEVICES permission (Android 13+); scans while shown and stops on leave
+ * (releasing the multicast lock). Manual-IP entry stays available in Settings as a fallback.
+ */
+@Composable
+private fun WifiDiscoveryContent(
+    modifier: Modifier = Modifier,
+    servers: List<DiscoveredServer>,
+    onStartDiscovery: () -> Unit,
+    onStopDiscovery: () -> Unit,
+    onConnectServer: (DiscoveredServer) -> Unit,
+    onSettings: () -> Unit,
+) {
+    val context = LocalContext.current
+    val needsPermission = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+    var permissionGranted by remember {
+        mutableStateOf(
+            !needsPermission || ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.NEARBY_WIFI_DEVICES,
+            ) == PackageManager.PERMISSION_GRANTED,
+        )
+    }
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted -> permissionGranted = granted }
+
+    // Scan while shown (once permitted); stop on leave. Re-runs when permission flips on.
+    DisposableEffect(permissionGranted) {
+        if (permissionGranted) onStartDiscovery()
+        onDispose { onStopDiscovery() }
+    }
+
+    Column(
+        modifier = modifier
+            .verticalScroll(rememberScrollState())
+            .navigationBarsPadding()
+            .padding(horizontal = 28.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Spacer(Modifier.height(64.dp))
+        AppGlyph(size = 64.dp, iconSize = 30.dp)
+        Spacer(Modifier.height(18.dp))
+        Text(
+            text = "Choose your Mac",
+            color = DeskLinkTokens.TextPrimary,
+            fontFamily = PlexSans,
+            fontSize = 26.sp,
+            fontWeight = FontWeight.W700,
+        )
+        Spacer(Modifier.height(6.dp))
+        Text(
+            text = "DeskLink servers found on your Wi-Fi network",
+            color = DeskLinkTokens.TextSecondary,
+            fontFamily = PlexSans,
+            fontSize = 14.sp,
+            textAlign = TextAlign.Center,
+        )
+        Spacer(Modifier.height(26.dp))
+
+        when {
+            !permissionGranted -> GradientButton(
+                text = "Find Macs",
+                onClick = { permissionLauncher.launch(Manifest.permission.NEARBY_WIFI_DEVICES) },
+                modifier = Modifier.width(230.dp),
+                height = 52.dp,
+                cornerRadius = DeskLinkTokens.RadiusButtonLarge,
+                fontSize = 16.sp,
+            )
+
+            servers.isEmpty() -> Text(
+                text = "Searching for Macs…",
+                color = DeskLinkTokens.TextSecondary,
+                fontFamily = PlexSans,
+                fontSize = 14.sp,
+            )
+
+            else -> servers.forEach { server ->
+                DiscoveredMacRow(server = server, onClick = { onConnectServer(server) })
+                Spacer(Modifier.height(10.dp))
+            }
+        }
+
+        Spacer(Modifier.height(22.dp))
+        GhostTextButton(text = "Settings", onClick = onSettings)
+        Spacer(Modifier.height(40.dp))
+    }
+}
+
+@Composable
+private fun DiscoveredMacRow(server: DiscoveredServer, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .widthIn(max = 420.dp)
+            .clip(DeskLinkTokens.ShapeCard)
+            .background(color = DeskLinkTokens.Surface04, shape = DeskLinkTokens.ShapeCard)
+            .border(BorderStroke(1.dp, DeskLinkTokens.Border10), DeskLinkTokens.ShapeCard)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = server.name,
+                color = DeskLinkTokens.TextPrimary,
+                fontFamily = PlexSans,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.W600,
+            )
+            Spacer(Modifier.height(2.dp))
+            MonoText(
+                text = server.host,
+                color = DeskLinkTokens.TextQuaternary,
+                fontSize = 12.5.sp,
+            )
+        }
+        Icon(
+            imageVector = Icons.Outlined.Cable,
+            contentDescription = null,
+            tint = DeskLinkTokens.AccentLight,
+            modifier = Modifier.size(20.dp),
+        )
+    }
+}
+
 @Composable
 private fun ConnectingContent(
     modifier: Modifier = Modifier,
@@ -236,6 +396,7 @@ private fun ConnectingContent(
 private fun ErrorContent(
     modifier: Modifier = Modifier,
     errorCode: String,
+    transportMode: TransportMode,
     onTryAgain: () -> Unit,
     onOpenSettings: () -> Unit,
 ) {
@@ -269,8 +430,12 @@ private fun ErrorContent(
         )
         Spacer(Modifier.height(10.dp))
         Text(
-            text = "Couldn't reach the DeskLink server. Make sure the Mac app is " +
-                "running and your USB cable is securely connected.",
+            text = "Couldn't reach the DeskLink server. Make sure the Mac app is running and " +
+                if (transportMode == TransportMode.LAN) {
+                    "the tablet and Mac are on the same Wi-Fi network."
+                } else {
+                    "your USB cable is securely connected."
+                },
             color = DeskLinkTokens.TextSecondary,
             fontFamily = PlexSans,
             fontSize = 15.5.sp,
