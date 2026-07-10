@@ -69,7 +69,9 @@ import com.desklink.android.presentation.components.SpinnerRing
 import com.desklink.android.presentation.theme.DeskLinkTokens
 import com.desklink.android.presentation.theme.PlexSans
 import com.desklink.android.service.MirrorConnectionService
+import kotlin.math.abs
 import kotlin.math.hypot
+import kotlin.math.max
 
 @SuppressLint("ClickableViewAccessibility")
 @Composable
@@ -123,7 +125,13 @@ fun DisplayScreen(
     var lastNx by remember { mutableFloatStateOf(0f) }
     var lastNy by remember { mutableFloatStateOf(0f) }
 
-    // Two-finger pinch/pan tracking (screen px; the touch layer is untransformed).
+    // Two-finger pinch/pan tracking (screen px; the touch layer is untransformed). Each
+    // two-finger gesture locks into one intent (zoom OR scroll/pan) once it passes a slop,
+    // so the two never fight. `start*` anchor the lock decision; `prev*` give per-frame deltas.
+    var twoFingerMode by remember { mutableStateOf(TwoFingerMode.Undecided) }
+    var startDist by remember { mutableFloatStateOf(0f) }
+    var startCx by remember { mutableFloatStateOf(0f) }
+    var startCy by remember { mutableFloatStateOf(0f) }
     var prevPinchDist by remember { mutableFloatStateOf(0f) }
     var prevCx by remember { mutableFloatStateOf(0f) }
     var prevCy by remember { mutableFloatStateOf(0f) }
@@ -256,14 +264,10 @@ fun DisplayScreen(
                 }
                 gestureMulti = true
                 flingJob?.cancel(); flingJob = null
-                if (count == 2) {
-                    prevPinchDist = pointerDistance(event)
-                    prevCx = pointerCentroidX(event); prevCy = pointerCentroidY(event)
-                } else {
-                    // 3+ fingers: stop two-finger scroll/zoom tracking.
-                    scrolling = false
-                    prevPinchDist = 0f
-                }
+                // Seed on the next two-finger MOVE (start positions), and decide the mode then.
+                prevPinchDist = 0f
+                twoFingerMode = TwoFingerMode.Undecided
+                if (count >= 3) scrolling = false
             }
 
             PointerPhase.MOVE -> when {
@@ -272,27 +276,48 @@ fun DisplayScreen(
                     val curCx = pointerCentroidX(event)
                     val curCy = pointerCentroidY(event)
                     if (prevPinchDist <= MIN_PINCH_DIST_PX) {
-                        // (Re)seed after two fingers land or a finger lifts/rejoins, so the
-                        // first delta isn't computed against a stale centroid.
+                        // (Re)seed after two fingers land or a finger lifts/rejoins.
+                        startDist = curDist; startCx = curCx; startCy = curCy
                         prevPinchDist = curDist; prevCx = curCx; prevCy = curCy
+                        twoFingerMode = TwoFingerMode.Undecided
                     } else {
-                        zoom.pinch(curDist / prevPinchDist, curCx, curCy, w, h)
-                        val dCx = curCx - prevCx
-                        val dCy = curCy - prevCy
-                        if (zoom.isZoomed) {
-                            zoom.pan(dCx, dCy, w, h) // pan the magnified view
-                        } else {
-                            // Not zoomed: two-finger drag scrolls the Mac. Track velocity for fling.
-                            val dxN = dCx / w
-                            val dyN = dCy / h
-                            viewModel.sendScroll(dxN, dyN)
-                            val dt = if (lastScrollTimeMs == 0L) flingDecay.frameMs
-                                else (event.eventTime - lastScrollTimeMs).coerceAtLeast(1L)
-                            velocityTracker.track(dxN, dyN, dt)
-                            lastScrollTimeMs = event.eventTime
-                            scrolling = true
+                        // Lock the gesture to zoom OR scroll/pan once it passes the slop —
+                        // whichever moved more from the start (spread vs. translate).
+                        if (twoFingerMode == TwoFingerMode.Undecided) {
+                            val spread = abs(curDist - startDist)
+                            val travel = hypot(curCx - startCx, curCy - startCy)
+                            if (max(spread, travel) > GESTURE_SLOP_PX) {
+                                twoFingerMode =
+                                    if (spread >= travel) TwoFingerMode.Zoom else TwoFingerMode.ScrollPan
+                            }
                         }
-                        applyZoom()
+                        when (twoFingerMode) {
+                            TwoFingerMode.Zoom -> {
+                                zoom.pinch(curDist / prevPinchDist, curCx, curCy, w, h)
+                                applyZoom()
+                            }
+
+                            TwoFingerMode.ScrollPan -> {
+                                val dCx = curCx - prevCx
+                                val dCy = curCy - prevCy
+                                if (zoom.isZoomed) {
+                                    zoom.pan(dCx, dCy, w, h) // pan the magnified view
+                                    applyZoom()
+                                } else {
+                                    // Not zoomed: two-finger drag scrolls the Mac; track velocity for fling.
+                                    val dxN = dCx / w
+                                    val dyN = dCy / h
+                                    viewModel.sendScroll(dxN, dyN)
+                                    val dt = if (lastScrollTimeMs == 0L) flingDecay.frameMs
+                                        else (event.eventTime - lastScrollTimeMs).coerceAtLeast(1L)
+                                    velocityTracker.track(dxN, dyN, dt)
+                                    lastScrollTimeMs = event.eventTime
+                                    scrolling = true
+                                }
+                            }
+
+                            TwoFingerMode.Undecided -> Unit // wait for the slop before acting
+                        }
                         prevPinchDist = curDist; prevCx = curCx; prevCy = curCy
                     }
                 }
@@ -307,10 +332,11 @@ fun DisplayScreen(
             }
 
             PointerPhase.POINTER_UP -> {
-                // A finger lifted mid-gesture; re-seed the pinch trackers on the next MOVE
-                // (pointer indices shift) and keep suppressing single-finger forwarding.
+                // A finger lifted mid-gesture; re-seed the pinch trackers and re-decide the
+                // mode on the next MOVE (pointer indices shift). Keep suppressing single-finger.
                 longPressJob?.cancel()
                 prevPinchDist = 0f
+                twoFingerMode = TwoFingerMode.Undecided
             }
 
             PointerPhase.UP -> {
@@ -502,6 +528,13 @@ private const val PRESS_DEBOUNCE_MS = 60L
 /** Guards against a divide-by-~zero when a two-finger gesture starts with the fingers
  *  almost coincident. */
 private const val MIN_PINCH_DIST_PX = 1f
+
+/** Movement (finger spread or centroid travel, px) before a two-finger gesture commits to
+ *  zoom or scroll/pan. Keeps the two from firing together on incidental jitter. */
+private const val GESTURE_SLOP_PX = 24f
+
+/** A two-finger gesture is locked to one intent after it passes [GESTURE_SLOP_PX]. */
+private enum class TwoFingerMode { Undecided, Zoom, ScrollPan }
 
 private fun pointerDistance(event: MotionEvent): Float =
     hypot(event.getX(0) - event.getX(1), event.getY(0) - event.getY(1))
