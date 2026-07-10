@@ -223,7 +223,14 @@ WiFi는 IP 변동/로밍 특성이 있다. 방금 하드닝한 `ConnectionManage
 - TDD: 디스커버리 결과 파싱/후보 선택 로직(네트워크는 통합 테스트).
 - DoD: 목록에서 맥 선택 → 연결. 권한 거부 시 안내.
 
-### P3 — 보안 (TLS + 페어링) — 실사용 전 필수
+### P3 — 보안 (TLS + 페어링) — 실사용 전 필수  ✔ 완료(기기 검증 대기)
+
+> 구현: TLS-PSK는 안드로이드에서 번들 Conscrypt + deprecated PSKKeyManager를 강제해
+> 채택하지 않고, **자체서명 TLS + TOFU 핀닝 + PIN 상호 인증**으로 갔다. 맥은 자체서명
+> 신원(create_tls_cert.sh, 키체인)으로 LAN 리스너를 TLS 서빙하고, 안드로이드는 SSLSocket
+> + 인증서 TOFU 핀닝. 그 위에서 PIN(HKDF→키) 기반 HMAC 챌린지-응답으로 상호 인증
+> (AUTH_CHALLENGE/RESPONSE/CONFIRM, TLS 안, protocol_vectors 3자 벡터). USB는 평문·무인증
+> 그대로. 미페어링/오PIN 시 LAN 핸드셰이크 거부, 서버 실패 5회 잠금.
 - 목표: LAN 채널 암호화 + 상호 인증.
 - 변경: `TlsSecureChannel`(맥/안드로이드 대칭) + PIN/QR 페어링 + 키 저장 + 핸드셰이크 인증(§6).
   TLS-PSK 우선(안드로이드 PSK 검증), 아니면 TLS+TOFU+PIN.

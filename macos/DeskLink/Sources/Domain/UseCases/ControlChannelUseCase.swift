@@ -15,6 +15,11 @@ public final class ControlChannelUseCase: Sendable {
     private let monitor: ConnectionMonitor
     private let handshakeHandler = HandshakeHandler()
 
+    /// LAN pairing gate. With no key (USB) it is pre-authenticated and issues no
+    /// challenge, so the flow is unchanged. With a key (LAN) the client must pass the
+    /// challenge-response before the handshake is accepted.
+    private let authGate: AuthGate
+
     /// Invoked once config negotiation succeeds, with the negotiated config, so the
     /// composition root can (re)start the video pipeline. Defaults to a no-op for
     /// callers/tests that manage streaming separately.
@@ -33,6 +38,7 @@ public final class ControlChannelUseCase: Sendable {
         server: any StreamServing,
         receiver: any PacketReceiving,
         monitor: ConnectionMonitor = ConnectionMonitor(),
+        authKey: Data? = nil,
         onStreamStart: @escaping @Sendable (DisplayConfig) async throws -> Void = { _ in },
         onClientConnected: @escaping @Sendable (ClientInfo, DisplayConfig) async -> Void = { _, _ in },
         onClientDisconnected: @escaping @Sendable () async -> Void = { }
@@ -40,6 +46,7 @@ public final class ControlChannelUseCase: Sendable {
         self.server = server
         self.receiver = receiver
         self.monitor = monitor
+        self.authGate = AuthGate(key: authKey)
         self.onStreamStart = onStreamStart
         self.onClientConnected = onClientConnected
         self.onClientDisconnected = onClientDisconnected
@@ -69,6 +76,11 @@ public final class ControlChannelUseCase: Sendable {
     /// the same byte stream throughout, so the new client's handshake is processed.
     private func runKeepAlive() async throws {
         for await _ in server.clientConnections {
+            // LAN pairing: challenge the client before its handshake is accepted. USB
+            // (no key) returns nil and skips this — the flow is unchanged.
+            if let challenge = await authGate.beginChallenge() {
+                try? await server.send(data: challenge, type: .authChallenge)
+            }
             // Fresh liveness window for this client, then ping until it drops.
             monitor.recordPong()
             try? await runPingLoop() // returns on PONG-timeout; then await next client
@@ -146,7 +158,20 @@ public final class ControlChannelUseCase: Sendable {
             monitor.recordPong()
             return clientInfo
 
+        case .authResponse:
+            // Verify the client's proof; on success confirm with the server's proof.
+            // On failure stay unauthenticated (the client times out); the gate counts
+            // failures toward a lockout.
+            if let confirm = await authGate.verifyResponse(frame.payload) {
+                try await server.send(data: confirm, type: .authConfirm)
+            }
+            return clientInfo
+
         case .handshakeRequest:
+            // LAN requires pairing first: ignore the handshake until authenticated.
+            guard await authGate.isAuthenticated else {
+                return clientInfo
+            }
             switch handshakeHandler.handleHandshakeRequest(payload: frame.payload) {
             case .accepted(let response, let info):
                 try await server.send(data: response, type: .handshakeResponse)

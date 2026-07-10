@@ -8,6 +8,9 @@ import com.desklink.android.domain.model.ConnectionError
 import com.desklink.android.domain.model.ConnectionState
 import com.desklink.android.domain.model.DisplayConfig
 import com.desklink.android.domain.model.MessageType
+import com.desklink.android.data.security.PairingAuth
+import com.desklink.android.data.security.PairingCrypto
+import com.desklink.android.data.security.PairingKeyProvider
 import com.desklink.android.domain.model.ProtocolConstants
 import com.desklink.android.domain.transport.Transport
 import io.mockk.coEvery
@@ -47,6 +50,16 @@ class ConnectionManagerImplTest {
         override suspend fun host() = "127.0.0.1"
     }
 
+    /** No-auth key provider (USB / unpaired): the LAN auth handshake is skipped. */
+    private fun noAuth() = object : PairingKeyProvider {
+        override fun currentKey(): ByteArray? = null
+    }
+
+    /** Key provider that forces the LAN auth handshake with [key]. */
+    private fun withKey(key: ByteArray) = object : PairingKeyProvider {
+        override fun currentKey(): ByteArray = key
+    }
+
     private fun mockClient(receive: () -> Flow<Pair<Byte, ByteArray>>): TCPClient {
         val client = mockk<TCPClient>(relaxed = true)
         coEvery { client.connect(any(), any()) } returns Unit
@@ -67,7 +80,7 @@ class ConnectionManagerImplTest {
                 // then completes; control loop re-collects a fresh (empty) flow
             }
         }
-        val manager = ConnectionManagerImpl(hs, client, fakeTransport())
+        val manager = ConnectionManagerImpl(hs, client, fakeTransport(), noAuth())
         manager.managerScope = backgroundScope
 
         manager.connectionState.test {
@@ -90,7 +103,7 @@ class ConnectionManagerImplTest {
         val hs = fakeHandshakeClient()
         // receivePackets never emits -> withTimeout fires.
         val client = mockClient { flow { kotlinx.coroutines.awaitCancellation() } }
-        val manager = ConnectionManagerImpl(hs, client, fakeTransport())
+        val manager = ConnectionManagerImpl(hs, client, fakeTransport(), noAuth())
         manager.managerScope = backgroundScope
 
         val job = launch { manager.connect(config) }
@@ -114,7 +127,7 @@ class ConnectionManagerImplTest {
         val client = mockClient {
             flow { emit(MessageType.HANDSHAKE_RESPONSE to ByteArray(0)) }
         }
-        val manager = ConnectionManagerImpl(hs, client, fakeTransport())
+        val manager = ConnectionManagerImpl(hs, client, fakeTransport(), noAuth())
         manager.managerScope = backgroundScope
 
         manager.connect(config)
@@ -151,7 +164,7 @@ class ConnectionManagerImplTest {
                 else -> flow<Pair<Byte, ByteArray>> { throw java.io.IOException("lost") }
             }
         }
-        val manager = ConnectionManagerImpl(hs, client, fakeTransport())
+        val manager = ConnectionManagerImpl(hs, client, fakeTransport(), noAuth())
         manager.managerScope = backgroundScope
 
         manager.connect(config)
@@ -182,7 +195,7 @@ class ConnectionManagerImplTest {
                 else -> flow { kotlinx.coroutines.awaitCancellation() } // stay connected
             }
         }
-        val manager = ConnectionManagerImpl(hs, client, fakeTransport())
+        val manager = ConnectionManagerImpl(hs, client, fakeTransport(), noAuth())
         manager.managerScope = backgroundScope
 
         manager.connect(config)
@@ -215,7 +228,7 @@ class ConnectionManagerImplTest {
                 else -> flow { kotlinx.coroutines.awaitCancellation() }
             }
         }
-        val manager = ConnectionManagerImpl(hs, client, fakeTransport())
+        val manager = ConnectionManagerImpl(hs, client, fakeTransport(), noAuth())
         manager.managerScope = backgroundScope
 
         manager.connect(config)
@@ -247,7 +260,7 @@ class ConnectionManagerImplTest {
             rxCalls++
             if (rxCalls % 2 == 1) handshakeSuccessFlow() else flow { kotlinx.coroutines.awaitCancellation() }
         }
-        val manager = ConnectionManagerImpl(hs, client, fakeTransport())
+        val manager = ConnectionManagerImpl(hs, client, fakeTransport(), noAuth())
         manager.managerScope = backgroundScope
 
         manager.connect(config)
@@ -263,6 +276,78 @@ class ConnectionManagerImplTest {
         assertTrue(manager.connectionState.value is ConnectionState.Connected)
         // Exactly two connects (initial + re-entry) — no stale reconnect adding a third.
         coVerify(exactly = 2) { client.connect(any(), any()) }
+    }
+
+    @Test
+    fun `LAN pairing auth succeeds then the handshake connects`() = runTest {
+        val hs = fakeHandshakeClient()
+        val key = PairingCrypto.derivePsk("123456")
+        val serverNonce = ByteArray(ProtocolConstants.AUTH_NONCE_LENGTH) { it.toByte() }
+        val sent = mutableListOf<Pair<Byte, ByteArray>>()
+        val client = mockk<TCPClient>(relaxed = true)
+        coEvery { client.connect(any(), any()) } returns Unit
+        coEvery { client.disconnect() } returns Unit
+        coEvery { client.send(any(), any()) } answers {
+            sent.add(firstArg<Byte>() to secondArg<ByteArray>()); Unit
+        }
+        var rxCalls = 0
+        every { client.receivePackets() } answers {
+            rxCalls++
+            if (rxCalls == 1) {
+                flow {
+                    emit(MessageType.AUTH_CHALLENGE to serverNonce)
+                    // The client has now replied with AUTH_RESPONSE (captured in `sent`);
+                    // confirm with the matching server proof.
+                    val response = sent.first { it.first == MessageType.AUTH_RESPONSE }.second
+                    val clientNonce = response.copyOfRange(0, ProtocolConstants.AUTH_NONCE_LENGTH)
+                    emit(MessageType.AUTH_CONFIRM to PairingAuth.serverProof(key, serverNonce, clientNonce))
+                }
+            } else {
+                handshakeSuccessFlow()
+            }
+        }
+        val manager = ConnectionManagerImpl(hs, client, fakeTransport(), withKey(key))
+        manager.managerScope = backgroundScope
+
+        manager.connect(config)
+        advanceUntilIdle()
+
+        assertTrue(
+            manager.connectionState.value is ConnectionState.Connected,
+            "expected Connected, got ${manager.connectionState.value}",
+        )
+        // The AUTH_RESPONSE we sent carries a valid client proof.
+        val response = sent.first { it.first == MessageType.AUTH_RESPONSE }.second
+        val clientNonce = response.copyOfRange(0, ProtocolConstants.AUTH_NONCE_LENGTH)
+        val proof = response.copyOfRange(ProtocolConstants.AUTH_NONCE_LENGTH, response.size)
+        assertTrue(PairingAuth.verify(proof, PairingAuth.clientProof(key, serverNonce, clientNonce)))
+    }
+
+    @Test
+    fun `LAN pairing auth failure surfaces Error REFUSED`() = runTest {
+        val hs = fakeHandshakeClient()
+        val key = PairingCrypto.derivePsk("123456")
+        val serverNonce = ByteArray(ProtocolConstants.AUTH_NONCE_LENGTH) { it.toByte() }
+        val client = mockk<TCPClient>(relaxed = true)
+        coEvery { client.connect(any(), any()) } returns Unit
+        coEvery { client.send(any(), any()) } returns Unit
+        coEvery { client.disconnect() } returns Unit
+        every { client.receivePackets() } answers {
+            flow {
+                emit(MessageType.AUTH_CHALLENGE to serverNonce)
+                emit(MessageType.AUTH_CONFIRM to ByteArray(32)) // wrong server proof
+            }
+        }
+        val manager = ConnectionManagerImpl(hs, client, fakeTransport(), withKey(key))
+        manager.managerScope = backgroundScope
+
+        manager.connect(config)
+        advanceUntilIdle()
+
+        assertEquals(
+            ConnectionState.Error(ConnectionError.REFUSED),
+            manager.connectionState.value,
+        )
     }
 
     private fun handshakeSuccessFlow(): Flow<Pair<Byte, ByteArray>> = flow {

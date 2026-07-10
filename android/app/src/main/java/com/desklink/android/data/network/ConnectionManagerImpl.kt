@@ -6,8 +6,11 @@ import com.desklink.android.domain.model.DisplayConfig
 import com.desklink.android.domain.model.MessageType
 import com.desklink.android.domain.model.ProtocolConstants
 import android.util.Log
+import com.desklink.android.data.security.PairingAuth
+import com.desklink.android.data.security.PairingKeyProvider
 import com.desklink.android.domain.repository.ConnectionRepository
 import com.desklink.android.domain.transport.Transport
+import java.security.SecureRandom
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -26,11 +29,15 @@ import kotlinx.coroutines.withTimeout
 import javax.inject.Inject
 import javax.inject.Singleton
 
+/** Thrown when LAN pairing authentication fails (wrong/absent PIN or a rejecting/rogue server). */
+class PairingAuthException(message: String) : Exception(message)
+
 @Singleton
 class ConnectionManagerImpl @Inject constructor(
     private val handshakeClient: HandshakeClient,
     private val controlClient: TCPClient,
     private val transport: Transport,
+    private val pairingKeyProvider: PairingKeyProvider,
 ) : ConnectionRepository {
 
     /**
@@ -128,6 +135,14 @@ class ConnectionManagerImpl @Inject constructor(
             val host = transport.host()
             Log.i(TAG, "connecting control channel to $host:${ProtocolConstants.PORT_CONTROL}")
             controlClient.connect(host, ProtocolConstants.PORT_CONTROL)
+
+            // LAN: mutually authenticate with the pairing PIN over the (TLS) control
+            // channel before the handshake. USB returns a null key and skips this.
+            pairingKeyProvider.currentKey()?.let { key ->
+                Log.i(TAG, "authenticating LAN connection with pairing PIN")
+                withTimeout(ProtocolConstants.HANDSHAKE_TIMEOUT) { runClientAuth(key) }
+            }
+
             Log.i(TAG, "control channel connected; sending HANDSHAKE_REQUEST")
 
             // Advertise the device's REAL native screen size so the Mac's width clamp
@@ -169,6 +184,12 @@ class ConnectionManagerImpl @Inject constructor(
             // Corrupt stream during handshake.
             Log.e(TAG, "framing error during handshake", e)
             lastFailureError = ConnectionError.LOST
+            controlClient.disconnect()
+            false
+        } catch (e: PairingAuthException) {
+            // LAN pairing failed (wrong/absent PIN, or server rejected us).
+            Log.e(TAG, "pairing authentication failed", e)
+            lastFailureError = ConnectionError.REFUSED
             controlClient.disconnect()
             false
         } catch (e: Exception) {
@@ -254,6 +275,52 @@ class ConnectionManagerImpl @Inject constructor(
                 }
             }
         return connected
+    }
+
+    /**
+     * LAN mutual authentication over the (TLS) control channel, before the handshake.
+     * Server → AUTH_CHALLENGE(serverNonce); we reply AUTH_RESPONSE(clientNonce + proof);
+     * server → AUTH_CONFIRM(serverProof) which we verify. Throws [PairingAuthException]
+     * if the server rejects us (no CONFIRM) or its proof is wrong (impersonation). This
+     * collection completes before [runHandshake] starts its own, so the two never read
+     * the socket concurrently.
+     */
+    private suspend fun runClientAuth(key: ByteArray) {
+        val clientNonce = ByteArray(ProtocolConstants.AUTH_NONCE_LENGTH)
+            .also { SecureRandom().nextBytes(it) }
+        var serverNonce: ByteArray? = null
+        var authenticated = false
+        var done = false
+
+        controlClient.receivePackets()
+            .takeWhile { !done }
+            .collect { (type, payload) ->
+                when (type) {
+                    MessageType.AUTH_CHALLENGE -> {
+                        if (payload.size != ProtocolConstants.AUTH_NONCE_LENGTH) {
+                            done = true
+                            return@collect
+                        }
+                        serverNonce = payload
+                        val proof = PairingAuth.clientProof(key, payload, clientNonce)
+                        controlClient.send(MessageType.AUTH_RESPONSE, clientNonce + proof)
+                    }
+
+                    MessageType.AUTH_CONFIRM -> {
+                        val sNonce = serverNonce
+                        if (sNonce != null &&
+                            PairingAuth.verify(payload, PairingAuth.serverProof(key, sNonce, clientNonce))
+                        ) {
+                            authenticated = true
+                        }
+                        done = true
+                    }
+
+                    else -> { /* ignore until authenticated */ }
+                }
+            }
+
+        if (!authenticated) throw PairingAuthException("LAN pairing authentication failed")
     }
 
     /**

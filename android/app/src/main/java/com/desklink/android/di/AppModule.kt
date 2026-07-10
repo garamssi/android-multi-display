@@ -6,8 +6,10 @@ import com.desklink.android.data.device.UsbStateMonitorImpl
 import com.desklink.android.data.discovery.NsdPeerDiscovery
 import com.desklink.android.data.input.InputRepositoryImpl
 import com.desklink.android.data.network.ConnectionManagerImpl
+import com.desklink.android.data.security.PairingKeyProvider
 import com.desklink.android.data.security.RoutingSecureChannel
 import com.desklink.android.data.security.SecureChannel
+import com.desklink.android.data.security.SettingsPairingKeyProvider
 import com.desklink.android.data.settings.SettingsStore
 import com.desklink.android.data.settings.SharedPreferencesSettingsStore
 import com.desklink.android.data.transport.RoutingTransport
@@ -92,4 +94,10 @@ abstract class AppModule {
     abstract fun bindSecureChannel(
         impl: RoutingSecureChannel,
     ): SecureChannel
+
+    @Binds
+    @Singleton
+    abstract fun bindPairingKeyProvider(
+        impl: SettingsPairingKeyProvider,
+    ): PairingKeyProvider
 }
