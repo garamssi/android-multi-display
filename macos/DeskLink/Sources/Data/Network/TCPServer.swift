@@ -25,6 +25,10 @@ public final class TCPServer: StreamServing, PacketReceiving, @unchecked Sendabl
     /// [advertiseBonjour]); nil (default) means no advertisement. Guarded by [lock].
     private var bonjourServiceType: String?
 
+    /// OS version advertised in the Bonjour TXT record (shown on the tablet's server
+    /// card), or nil to advertise no TXT. Guarded by [lock].
+    private var bonjourOsVersion: String?
+
     private let connectionStream: AsyncStream<ClientConnection>
     private let connectionContinuation: AsyncStream<ClientConnection>.Continuation
 
@@ -60,8 +64,12 @@ public final class TCPServer: StreamServing, PacketReceiving, @unchecked Sendabl
 
     /// Configure Bonjour advertisement, applied on the next `start`. Only the control
     /// channel advertises, and only in LAN mode; pass nil (or don't call) otherwise.
-    public func advertiseBonjour(serviceType: String?) {
-        lock.withLock { bonjourServiceType = serviceType }
+    /// `osVersion` is published in the TXT record for the tablet's server card.
+    public func advertiseBonjour(serviceType: String?, osVersion: String?) {
+        lock.withLock {
+            bonjourServiceType = serviceType
+            bonjourOsVersion = osVersion
+        }
     }
 
     public func start(port: UInt16, scope: ListenerScope) async throws {
@@ -99,7 +107,12 @@ public final class TCPServer: StreamServing, PacketReceiving, @unchecked Sendabl
             // discovery list. Requires NSBonjourServices + NSLocalNetworkUsageDescription
             // in Info.plist.
             if let serviceType = bonjourServiceType {
-                newListener.service = NWListener.Service(type: serviceType)
+                if let osVersion = bonjourOsVersion {
+                    let txt = NWTXTRecord([ProtocolConstants.bonjourTxtKeyOS: osVersion])
+                    newListener.service = NWListener.Service(type: serviceType, txtRecord: txt)
+                } else {
+                    newListener.service = NWListener.Service(type: serviceType)
+                }
             }
 
             newListener.stateUpdateHandler = { [weak self] state in

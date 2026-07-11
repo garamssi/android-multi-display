@@ -14,6 +14,9 @@ public enum ProtocolConstants {
     // only needs the resolved host; the video/input ports are the fixed constants above.
     public static let bonjourServiceType = "_desklink._tcp"
 
+    /// Bonjour TXT key the Mac advertises its OS version under (e.g. "macOS 15.4").
+    public static let bonjourTxtKeyOS = "os"
+
     // LAN pairing (P3, TLS-PSK). Cross-platform contract with the Android client: both
     // sides derive the identical pre-shared key from the 6-digit PIN via HKDF-SHA256
     // (RFC 5869) over these parameters, or the TLS-PSK handshake fails. Reference +

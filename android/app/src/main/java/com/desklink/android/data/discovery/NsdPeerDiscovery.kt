@@ -22,6 +22,10 @@ import javax.inject.Singleton
 private const val TAG = "DeskLink"
 private const val MULTICAST_TAG = "desklink-nsd"
 
+/** Reads the advertised OS version from a resolved service's TXT record, if present. */
+private fun osOf(info: NsdServiceInfo): String? =
+    info.attributes[ProtocolConstants.TXT_KEY_OS]?.let { String(it, Charsets.UTF_8) }
+
 /**
  * NsdManager-backed [PeerDiscovery]: browses for the Mac's advertised
  * [ProtocolConstants.SERVICE_TYPE] over Wi-Fi and resolves each to a host/port.
@@ -132,7 +136,7 @@ class NsdPeerDiscovery @Inject constructor(
 
                 override fun onServiceUpdated(updated: NsdServiceInfo) {
                     val host = updated.hostAddresses.firstOrNull()?.hostAddress ?: return
-                    emit(registry.upsert(DiscoveredServer(name, host, updated.port)))
+                    emit(registry.upsert(DiscoveredServer(name, host, updated.port, osOf(updated))))
                 }
 
                 override fun onServiceLost() {
@@ -169,7 +173,11 @@ class NsdPeerDiscovery @Inject constructor(
                 override fun onServiceResolved(resolved: NsdServiceInfo) {
                     @Suppress("DEPRECATION")
                     val host = resolved.host?.hostAddress ?: return
-                    emit(registry.upsert(DiscoveredServer(resolved.serviceName, host, resolved.port)))
+                    emit(
+                        registry.upsert(
+                            DiscoveredServer(resolved.serviceName, host, resolved.port, osOf(resolved)),
+                        ),
+                    )
                 }
             }
             @Suppress("DEPRECATION")

@@ -93,6 +93,13 @@ class SettingsRepository @Inject constructor(
     private val _pairingPin = MutableStateFlow(store.getString(KEY_PAIRING_PIN, ""))
     val pairingPin: StateFlow<String> = _pairingPin.asStateFlow()
 
+    /**
+     * Host of the most recently connected LAN server, so discovery can flag it "RECENT".
+     * Empty until the first LAN connect.
+     */
+    private val _lastConnectedHost = MutableStateFlow(store.getString(KEY_LAST_HOST, ""))
+    val lastConnectedHost: StateFlow<String> = _lastConnectedHost.asStateFlow()
+
     fun setResolution(width: Int, height: Int) {
         _config.update { it.copy(width = width, height = height) }
         store.putInt(KEY_WIDTH, width)
@@ -156,6 +163,14 @@ class SettingsRepository @Inject constructor(
 
     fun currentPairingPin(): String = _pairingPin.value
 
+    fun setLastConnectedHost(host: String) {
+        val trimmed = host.trim()
+        _lastConnectedHost.update { trimmed }
+        store.putString(KEY_LAST_HOST, trimmed)
+    }
+
+    fun currentLastConnectedHost(): String = _lastConnectedHost.value
+
     // --- Seeding from the store ---
 
     private fun loadConfig(): DisplayConfig = nativeConfig.copy(
@@ -191,5 +206,6 @@ class SettingsRepository @Inject constructor(
         private const val KEY_TRANSPORT_MODE = "transportMode"
         private const val KEY_MANUAL_HOST = "manualHost"
         private const val KEY_PAIRING_PIN = "pairingPin"
+        private const val KEY_LAST_HOST = "lastConnectedHost"
     }
 }

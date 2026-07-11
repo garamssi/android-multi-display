@@ -5,6 +5,13 @@ import android.content.pm.PackageManager
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.StartOffset
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -21,14 +28,20 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Cable
 import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.WarningAmber
+import androidx.compose.material.icons.outlined.Wifi
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -40,14 +53,20 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
 import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -56,7 +75,6 @@ import com.desklink.android.domain.model.DisplayConfig
 import com.desklink.android.domain.model.TransportMode
 import com.desklink.android.domain.transport.DiscoveredServer
 import com.desklink.android.presentation.components.AppGlyph
-import com.desklink.android.presentation.components.GhostTextButton
 import com.desklink.android.presentation.components.GradientButton
 import com.desklink.android.presentation.components.IndeterminateBar
 import com.desklink.android.presentation.components.MonoText
@@ -76,13 +94,15 @@ fun ConnectionScreen(
     val usbConnected by viewModel.usbConnected.collectAsStateWithLifecycle()
     val transportMode by viewModel.transportMode.collectAsStateWithLifecycle()
     val discoveredServers by viewModel.discoveredServers.collectAsStateWithLifecycle()
+    val lastConnectedHost by viewModel.lastConnectedHost.collectAsStateWithLifecycle()
 
     // Only navigate to Display in response to a Connect the user initiated here.
-    // Without this, returning to this screen while the control channel is still
-    // reporting "Connected" (mid-teardown) would immediately bounce back to Display.
     var connectRequested by remember { mutableStateOf(false) }
 
-    // Navigate to the display once fully connected.
+    // Pairing dialogs: a tapped discovered server, or the manual-IP entry.
+    var pairingServer by remember { mutableStateOf<DiscoveredServer?>(null) }
+    var showEnterIp by remember { mutableStateOf(false) }
+
     LaunchedEffect(state) {
         if (state is ConnectionState.Connected && connectRequested) {
             connectRequested = false
@@ -94,11 +114,8 @@ fun ConnectionScreen(
         state is ConnectionState.Handshaking ||
         state is ConnectionState.Negotiating ||
         state is ConnectionState.Reconnecting
-
     val isError = state is ConnectionState.Error
 
-    // Page background: the connect flow uses a radial gradient; the error state tints
-    // the center red (spec §2/§4). Settings uses a flat bg (that screen owns its own).
     val centerColor =
         if (isError) DeskLinkTokens.PageRadialErrorCenter else DeskLinkTokens.PageRadialCenter
 
@@ -139,17 +156,13 @@ fun ConnectionScreen(
                 )
 
                 transportMode == TransportMode.LAN -> WifiDiscoveryContent(
-                    modifier = Modifier
-                        .align(Alignment.Center)
-                        .fillMaxSize(),
+                    modifier = Modifier.fillMaxSize(),
                     servers = discoveredServers,
+                    lastConnectedHost = lastConnectedHost,
                     onStartDiscovery = viewModel::startDiscovery,
                     onStopDiscovery = viewModel::stopDiscovery,
-                    onConnectServer = {
-                        connectRequested = true
-                        viewModel.connectTo(it)
-                    },
-                    onSettings = onSettings,
+                    onSelectServer = { pairingServer = it },
+                    onEnterIp = { showEnterIp = true },
                 )
 
                 else -> {
@@ -159,9 +172,7 @@ fun ConnectionScreen(
                             connectRequested = true
                             viewModel.connect()
                         },
-                        onSettings = onSettings,
                     )
-                    // Bottom USB status pill, reflecting the real USB link state.
                     UsbChip(
                         connected = usbConnected,
                         modifier = Modifier
@@ -171,7 +182,116 @@ fun ConnectionScreen(
                     )
                 }
             }
+
+            // Top chrome (brand + mode pill + gear) on the home states only.
+            if (!isBusy && !isError) {
+                HomeChrome(
+                    transportMode = transportMode,
+                    onSettings = onSettings,
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .statusBarsPadding(),
+                )
+            }
         }
+
+        pairingServer?.let { server ->
+            PairingDialog(
+                title = "Pair with ${server.name}",
+                subtitle = "Enter the 6-digit PIN shown on the Mac (Settings → Connection).",
+                showHostField = false,
+                onConnect = { _, pin ->
+                    connectRequested = true
+                    viewModel.connectTo(server, pin)
+                    pairingServer = null
+                },
+                onDismiss = { pairingServer = null },
+            )
+        }
+
+        if (showEnterIp) {
+            PairingDialog(
+                title = "Connect by IP",
+                subtitle = "Enter the Mac's IP and the 6-digit pairing PIN shown on it.",
+                showHostField = true,
+                onConnect = { host, pin ->
+                    connectRequested = true
+                    viewModel.connectToManual(host, pin)
+                    showEnterIp = false
+                },
+                onDismiss = { showEnterIp = false },
+            )
+        }
+    }
+}
+
+/** Top bar: brand mark + transport-mode pill (left), settings gear (right). */
+@Composable
+private fun HomeChrome(
+    transportMode: TransportMode,
+    onSettings: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 24.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        AppGlyph(size = 26.dp, cornerRadius = 8.dp, iconSize = 14.dp, elevated = false)
+        Spacer(Modifier.width(10.dp))
+        Text(
+            text = "DeskLink",
+            color = DeskLinkTokens.TextPrimary,
+            fontFamily = PlexSans,
+            fontSize = 15.sp,
+            fontWeight = FontWeight.W600,
+        )
+        Spacer(Modifier.width(10.dp))
+        ModePill(transportMode)
+        Spacer(Modifier.weight(1f))
+        Box(
+            modifier = Modifier
+                .size(42.dp)
+                .clip(DeskLinkTokens.ShapeChip)
+                .background(DeskLinkTokens.Surface04, DeskLinkTokens.ShapeChip)
+                .border(BorderStroke(1.dp, DeskLinkTokens.Border10), DeskLinkTokens.ShapeChip)
+                .clickable(onClick = onSettings),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = Icons.Outlined.Settings,
+                contentDescription = "Settings",
+                tint = DeskLinkTokens.TextValue,
+                modifier = Modifier.size(20.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun ModePill(transportMode: TransportMode) {
+    val isWifi = transportMode == TransportMode.LAN
+    Row(
+        modifier = Modifier
+            .clip(DeskLinkTokens.ShapePill)
+            .background(DeskLinkTokens.AccentSelectedBg, DeskLinkTokens.ShapePill)
+            .border(BorderStroke(1.dp, DeskLinkTokens.AccentSelectedBorder), DeskLinkTokens.ShapePill)
+            .padding(horizontal = 10.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Icon(
+            imageVector = if (isWifi) Icons.Outlined.Wifi else Icons.Outlined.Cable,
+            contentDescription = null,
+            tint = DeskLinkTokens.AccentLight,
+            modifier = Modifier.size(12.dp),
+        )
+        MonoText(
+            text = if (isWifi) "Wi-Fi" else "USB",
+            color = DeskLinkTokens.AccentLight,
+            fontSize = 11.sp,
+        )
     }
 }
 
@@ -179,7 +299,6 @@ fun ConnectionScreen(
 private fun StartContent(
     modifier: Modifier = Modifier,
     onConnect: () -> Unit,
-    onSettings: () -> Unit,
 ) {
     Column(
         modifier = modifier,
@@ -213,24 +332,22 @@ private fun StartContent(
             iconSize = 19.dp,
             shadowElevation = 22.dp,
         )
-        Spacer(Modifier.height(18.dp))
-        GhostTextButton(text = "Settings", onClick = onSettings)
     }
 }
 
 /**
- * Wi-Fi home flow: browse for Macs advertised on the LAN and tap one to connect. Handles
- * the NEARBY_WIFI_DEVICES permission (Android 13+); scans while shown and stops on leave
- * (releasing the multicast lock). Manual-IP entry stays available in Settings as a fallback.
+ * Wi-Fi home: browse Macs advertised on the LAN and tap one to pair + connect. Handles
+ * the NEARBY_WIFI_DEVICES permission (Android 13+); scans while shown, stops on leave.
  */
 @Composable
 private fun WifiDiscoveryContent(
     modifier: Modifier = Modifier,
     servers: List<DiscoveredServer>,
+    lastConnectedHost: String,
     onStartDiscovery: () -> Unit,
     onStopDiscovery: () -> Unit,
-    onConnectServer: (DiscoveredServer) -> Unit,
-    onSettings: () -> Unit,
+    onSelectServer: (DiscoveredServer) -> Unit,
+    onEnterIp: () -> Unit,
 ) {
     val context = LocalContext.current
     val needsPermission = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
@@ -246,104 +363,407 @@ private fun WifiDiscoveryContent(
         ActivityResultContracts.RequestPermission(),
     ) { granted -> permissionGranted = granted }
 
-    // Scan while shown (once permitted); stop on leave. Re-runs when permission flips on.
     DisposableEffect(permissionGranted) {
         if (permissionGranted) onStartDiscovery()
         onDispose { onStopDiscovery() }
     }
 
+    val found = servers.isNotEmpty()
+
     Column(
         modifier = modifier
             .verticalScroll(rememberScrollState())
             .navigationBarsPadding()
-            .padding(horizontal = 28.dp),
+            .padding(horizontal = 24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Spacer(Modifier.height(64.dp))
-        AppGlyph(size = 64.dp, iconSize = 30.dp)
+        Spacer(Modifier.height(96.dp))
+        if (found) {
+            AppGlyph(size = 72.dp, iconSize = 34.dp)
+        } else {
+            RadarHero()
+        }
         Spacer(Modifier.height(18.dp))
         Text(
-            text = "Choose your Mac",
+            text = "Choose your Device",
             color = DeskLinkTokens.TextPrimary,
             fontFamily = PlexSans,
-            fontSize = 26.sp,
+            fontSize = 28.sp,
             fontWeight = FontWeight.W700,
         )
         Spacer(Modifier.height(6.dp))
         Text(
-            text = "DeskLink servers found on your Wi-Fi network",
+            text = when {
+                !permissionGranted -> "Allow nearby-devices access to find Macs on Wi-Fi"
+                found -> "${servers.size} server${if (servers.size == 1) "" else "s"} found on your Wi-Fi network"
+                else -> "Looking for DeskLink servers on your Wi-Fi network"
+            },
             color = DeskLinkTokens.TextSecondary,
             fontFamily = PlexSans,
             fontSize = 14.sp,
             textAlign = TextAlign.Center,
         )
-        Spacer(Modifier.height(26.dp))
+        Spacer(Modifier.height(30.dp))
 
-        when {
-            !permissionGranted -> GradientButton(
-                text = "Find Macs",
-                onClick = { permissionLauncher.launch(Manifest.permission.NEARBY_WIFI_DEVICES) },
-                modifier = Modifier.width(230.dp),
-                height = 52.dp,
-                cornerRadius = DeskLinkTokens.RadiusButtonLarge,
-                fontSize = 16.sp,
-            )
+        Column(modifier = Modifier.widthIn(max = 520.dp).fillMaxWidth()) {
+            when {
+                !permissionGranted -> GradientButton(
+                    text = "Find Macs",
+                    onClick = { permissionLauncher.launch(Manifest.permission.NEARBY_WIFI_DEVICES) },
+                    fillWidth = true,
+                    height = 52.dp,
+                    cornerRadius = DeskLinkTokens.RadiusButtonLarge,
+                    fontSize = 16.sp,
+                )
 
-            servers.isEmpty() -> Text(
-                text = "Searching for Macs…",
-                color = DeskLinkTokens.TextSecondary,
-                fontFamily = PlexSans,
-                fontSize = 14.sp,
-            )
+                found -> {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 4.dp, vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        MonoText(
+                            text = "AVAILABLE",
+                            color = DeskLinkTokens.TextQuaternary,
+                            fontSize = 11.sp,
+                            letterSpacingEm = 0.16f,
+                            uppercase = true,
+                        )
+                        Spacer(Modifier.weight(1f))
+                        SpinnerRing(size = 13.dp, strokeWidth = 2.dp) {}
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    servers.forEach { server ->
+                        DiscoveredServerCard(
+                            server = server,
+                            isRecent = server.host == lastConnectedHost && lastConnectedHost.isNotEmpty(),
+                            onClick = { onSelectServer(server) },
+                        )
+                        Spacer(Modifier.height(12.dp))
+                    }
+                }
 
-            else -> servers.forEach { server ->
-                DiscoveredMacRow(server = server, onClick = { onConnectServer(server) })
-                Spacer(Modifier.height(10.dp))
+                else -> ShimmerSkeletonCard()
             }
         }
 
-        Spacer(Modifier.height(22.dp))
-        GhostTextButton(text = "Settings", onClick = onSettings)
+        Spacer(Modifier.height(24.dp))
+        OutlineButton(
+            text = "Enter IP manually",
+            onClick = onEnterIp,
+            height = 46.dp,
+            cornerRadius = 13.dp,
+            fontSize = 14.5.sp,
+        )
         Spacer(Modifier.height(40.dp))
     }
 }
 
+/** App glyph with two expanding radar rings (searching state). */
 @Composable
-private fun DiscoveredMacRow(server: DiscoveredServer, onClick: () -> Unit) {
+private fun RadarHero() {
+    val transition = rememberInfiniteTransition(label = "radar")
+    Box(
+        modifier = Modifier.size(150.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        listOf(0, 1300).forEach { delayMs ->
+            val progress by transition.animateFloat(
+                initialValue = 0f,
+                targetValue = 1f,
+                animationSpec = infiniteRepeatable(
+                    animation = tween(2600, easing = LinearEasing),
+                    repeatMode = RepeatMode.Restart,
+                    initialStartOffset = StartOffset(delayMs),
+                ),
+                label = "ring$delayMs",
+            )
+            Box(
+                modifier = Modifier
+                    .size(150.dp)
+                    .scale(0.55f + progress * 1.55f)
+                    .alpha((1f - progress) * 0.55f)
+                    .clip(DeskLinkTokens.ShapePill)
+                    .border(1.5.dp, DeskLinkTokens.AccentSelectedBorder, DeskLinkTokens.ShapePill),
+            )
+        }
+        AppGlyph(size = 82.dp, iconSize = 40.dp)
+    }
+}
+
+/** Shimmering placeholder card shown while scanning. */
+@Composable
+private fun ShimmerSkeletonCard() {
+    val transition = rememberInfiniteTransition(label = "shimmer")
+    val pulse by transition.animateFloat(
+        initialValue = 0.35f,
+        targetValue = 0.85f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1400, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "pulse",
+    )
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .widthIn(max = 420.dp)
             .clip(DeskLinkTokens.ShapeCard)
-            .background(color = DeskLinkTokens.Surface04, shape = DeskLinkTokens.ShapeCard)
-            .border(BorderStroke(1.dp, DeskLinkTokens.Border10), DeskLinkTokens.ShapeCard)
+            .border(BorderStroke(1.dp, DeskLinkTokens.Border06), DeskLinkTokens.ShapeCard)
+            .background(DeskLinkTokens.Surface03, DeskLinkTokens.ShapeCard)
+            .padding(18.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .size(46.dp)
+                .alpha(pulse)
+                .clip(DeskLinkTokens.ShapeChip)
+                .background(DeskLinkTokens.Surface09),
+        )
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth(0.52f)
+                    .height(13.dp)
+                    .alpha(pulse)
+                    .clip(DeskLinkTokens.ShapeChip)
+                    .background(DeskLinkTokens.Surface09),
+            )
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth(0.32f)
+                    .height(11.dp)
+                    .alpha(pulse * 0.8f)
+                    .clip(DeskLinkTokens.ShapeChip)
+                    .background(DeskLinkTokens.Surface06),
+            )
+        }
+        SpinnerRing(size = 20.dp, strokeWidth = 2.dp) {}
+    }
+}
+
+@Composable
+private fun DiscoveredServerCard(
+    server: DiscoveredServer,
+    isRecent: Boolean,
+    onClick: () -> Unit,
+) {
+    val border = if (isRecent) DeskLinkTokens.AccentSelectedBorder else DeskLinkTokens.Border08
+    val fill = if (isRecent) DeskLinkTokens.AccentSelectedBg else DeskLinkTokens.Surface03
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(DeskLinkTokens.ShapeCard)
+            .background(fill, DeskLinkTokens.ShapeCard)
+            .border(BorderStroke(1.dp, border), DeskLinkTokens.ShapeCard)
             .clickable(onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = server.name,
-                color = DeskLinkTokens.TextPrimary,
-                fontFamily = PlexSans,
-                fontSize = 16.sp,
-                fontWeight = FontWeight.W600,
-            )
-            Spacer(Modifier.height(2.dp))
-            MonoText(
-                text = server.host,
-                color = DeskLinkTokens.TextQuaternary,
-                fontSize = 12.5.sp,
+        Box(
+            modifier = Modifier
+                .size(48.dp)
+                .clip(DeskLinkTokens.ShapeChip)
+                .background(DeskLinkTokens.AccentSelectedBg, DeskLinkTokens.ShapeChip)
+                .border(BorderStroke(1.dp, DeskLinkTokens.AccentSelectedBorder), DeskLinkTokens.ShapeChip),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = Icons.Outlined.Cable,
+                contentDescription = null,
+                tint = DeskLinkTokens.AccentLight,
+                modifier = Modifier.size(24.dp),
             )
         }
-        Icon(
-            imageVector = Icons.Outlined.Cable,
-            contentDescription = null,
-            tint = DeskLinkTokens.AccentLight,
-            modifier = Modifier.size(20.dp),
+        Column(modifier = Modifier.weight(1f)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(9.dp),
+            ) {
+                Text(
+                    text = server.name,
+                    color = DeskLinkTokens.TextPrimary,
+                    fontFamily = PlexSans,
+                    fontSize = 17.sp,
+                    fontWeight = FontWeight.W600,
+                )
+                if (isRecent) RecentPill()
+            }
+            Spacer(Modifier.height(4.dp))
+            MonoText(
+                text = server.osVersion?.let { "${server.host} · $it" } ?: server.host,
+                color = DeskLinkTokens.TextSecondary,
+                fontSize = 13.sp,
+            )
+        }
+        if (isRecent) {
+            Row(
+                modifier = Modifier
+                    .clip(DeskLinkTokens.ShapeChip)
+                    .background(DeskLinkTokens.AccentVertical, DeskLinkTokens.ShapeChip)
+                    .padding(horizontal = 18.dp, vertical = 11.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Text(
+                    text = "Connect",
+                    color = androidx.compose.ui.graphics.Color.White,
+                    fontFamily = PlexSans,
+                    fontSize = 14.5.sp,
+                    fontWeight = FontWeight.W600,
+                )
+            }
+        } else {
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(DeskLinkTokens.ShapeChip)
+                    .border(BorderStroke(1.dp, DeskLinkTokens.Border10), DeskLinkTokens.ShapeChip),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.Cable,
+                    contentDescription = "Connect",
+                    tint = DeskLinkTokens.TextSecondary,
+                    modifier = Modifier.size(18.dp),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun RecentPill() {
+    Box(
+        modifier = Modifier
+            .clip(DeskLinkTokens.ShapePill)
+            .background(DeskLinkTokens.SuccessChipBg, DeskLinkTokens.ShapePill)
+            .border(BorderStroke(1.dp, DeskLinkTokens.SuccessChipBorder), DeskLinkTokens.ShapePill)
+            .padding(horizontal = 7.dp, vertical = 2.dp),
+    ) {
+        MonoText(
+            text = "RECENT",
+            color = DeskLinkTokens.SuccessText,
+            fontSize = 10.sp,
+            letterSpacingEm = 0.05f,
+            uppercase = true,
         )
     }
+}
+
+/** Pairing dialog: PIN (and optionally a host field for manual IP entry). */
+@Composable
+private fun PairingDialog(
+    title: String,
+    subtitle: String,
+    showHostField: Boolean,
+    onConnect: (host: String, pin: String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var host by remember { mutableStateOf("") }
+    var pin by remember { mutableStateOf("") }
+    val canConnect = pin.length == 6 && (!showHostField || host.isNotBlank())
+
+    Dialog(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .widthIn(max = 420.dp)
+                .fillMaxWidth()
+                .clip(DeskLinkTokens.ShapeCard)
+                .background(DeskLinkTokens.PageRadialCenter, DeskLinkTokens.ShapeCard)
+                .border(BorderStroke(1.dp, DeskLinkTokens.Border10), DeskLinkTokens.ShapeCard)
+                .padding(22.dp),
+        ) {
+            Text(
+                text = title,
+                color = DeskLinkTokens.TextPrimary,
+                fontFamily = PlexSans,
+                fontSize = 19.sp,
+                fontWeight = FontWeight.W600,
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = subtitle,
+                color = DeskLinkTokens.TextSecondary,
+                fontFamily = PlexSans,
+                fontSize = 13.sp,
+            )
+            Spacer(Modifier.height(18.dp))
+            if (showHostField) {
+                DialogField(
+                    value = host,
+                    onValueChange = { host = it },
+                    placeholder = "Mac IP address (e.g. 192.168.0.10)",
+                    keyboardType = KeyboardType.Uri,
+                )
+                Spacer(Modifier.height(10.dp))
+            }
+            DialogField(
+                value = pin,
+                onValueChange = { new -> pin = new.filter { it.isDigit() }.take(6) },
+                placeholder = "6-digit pairing PIN",
+                keyboardType = KeyboardType.Number,
+            )
+            Spacer(Modifier.height(20.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlineButton(text = "Cancel", onClick = onDismiss, height = 46.dp)
+                Spacer(Modifier.weight(1f))
+                GradientButton(
+                    text = "Connect",
+                    onClick = { onConnect(host, pin) },
+                    enabled = canConnect,
+                    height = 46.dp,
+                    cornerRadius = 12.dp,
+                    fontSize = 15.sp,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun DialogField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    placeholder: String,
+    keyboardType: KeyboardType,
+) {
+    BasicTextField(
+        value = value,
+        onValueChange = onValueChange,
+        singleLine = true,
+        textStyle = TextStyle(
+            color = DeskLinkTokens.TextPrimary,
+            fontFamily = PlexSans,
+            fontSize = 15.sp,
+        ),
+        cursorBrush = SolidColor(DeskLinkTokens.AccentLight),
+        keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
+        modifier = Modifier.fillMaxWidth(),
+        decorationBox = { inner ->
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(DeskLinkTokens.ShapeChip)
+                    .background(DeskLinkTokens.Surface04, DeskLinkTokens.ShapeChip)
+                    .border(BorderStroke(1.dp, DeskLinkTokens.Border10), DeskLinkTokens.ShapeChip)
+                    .padding(horizontal = 14.dp, vertical = 13.dp),
+            ) {
+                if (value.isEmpty()) {
+                    Text(
+                        text = placeholder,
+                        color = DeskLinkTokens.TextQuaternary,
+                        fontFamily = PlexSans,
+                        fontSize = 15.sp,
+                    )
+                }
+                inner()
+            }
+        },
+    )
 }
 
 @Composable
@@ -404,7 +824,6 @@ private fun ErrorContent(
         modifier = modifier.padding(horizontal = 60.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        // Red-tint alert square (78dp).
         Box(
             modifier = Modifier
                 .size(78.dp)
@@ -461,8 +880,7 @@ private fun ErrorContent(
             )
         }
         Spacer(Modifier.height(26.dp))
-        // Error-code chip (mono, red-tinted).
-        val chipShape = androidx.compose.foundation.shape.RoundedCornerShape(7.dp)
+        val chipShape = RoundedCornerShape(7.dp)
         Box(
             modifier = Modifier
                 .clip(chipShape)
@@ -490,8 +908,6 @@ private fun UsbChip(connected: Boolean, modifier: Modifier = Modifier) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        // Honest cable-level signal: green when a USB data link exists, muted otherwise.
-        // It does NOT claim the peer is a Mac — that's only known once Connect succeeds.
         StatusDot(
             color = if (connected) DeskLinkTokens.Success else DeskLinkTokens.TextQuaternary,
             size = 7.dp,

@@ -22,9 +22,12 @@ interface PeerDiscovery {
  * @property name human-readable service name (defaults to the Mac's device name).
  * @property host resolved IPv4/host to dial.
  * @property port advertised control port (video/input use the fixed protocol ports).
+ * @property osVersion the Mac's OS version from the advertised TXT record (e.g.
+ *   "macOS 15.4"), or null if not advertised.
  */
 data class DiscoveredServer(
     val name: String,
     val host: String,
     val port: Int,
+    val osVersion: String? = null,
 )

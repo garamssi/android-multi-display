@@ -115,9 +115,15 @@ public final class ServerCoordinator {
         // and a bound socket would linger with no teardown path (the caller only flips
         // UI state on catch, it does not know to stop us).
         // In LAN mode, advertise the control channel over Bonjour so a tablet can find
-        // the Mac without a typed IP. USB (loopback) never advertises.
+        // the Mac without a typed IP. USB (loopback) never advertises. The TXT record
+        // carries the OS version shown on the tablet's server card.
         if listenerScope == .localNetwork {
-            controlServer.advertiseBonjour(serviceType: ProtocolConstants.bonjourServiceType)
+            let version = ProcessInfo.processInfo.operatingSystemVersion
+            let osVersion = "macOS \(version.majorVersion).\(version.minorVersion)"
+            controlServer.advertiseBonjour(
+                serviceType: ProtocolConstants.bonjourServiceType,
+                osVersion: osVersion
+            )
         }
 
         do {

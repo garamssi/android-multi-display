@@ -43,6 +43,9 @@ class ConnectionViewModel @Inject constructor(
     /** The selected transport, so the screen shows USB vs Wi-Fi (discovery) flows. */
     val transportMode: StateFlow<TransportMode> = settingsRepository.transportMode
 
+    /** Host of the last-connected LAN server, so the list can flag it "RECENT". */
+    val lastConnectedHost: StateFlow<String> = settingsRepository.lastConnectedHost
+
     /** Whether a USB data link to a host is present, for the home-screen indicator. */
     val usbConnected: StateFlow<Boolean> = usbStateMonitor.usbConnected()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
@@ -60,9 +63,16 @@ class ConnectionViewModel @Inject constructor(
         }
     }
 
-    /** Selects a discovered Mac as the LAN target and connects to it. */
-    fun connectTo(server: DiscoveredServer) {
-        settingsRepository.setManualHost(server.host)
+    /** Pairs with a discovered Mac (PIN) and connects to it. */
+    fun connectTo(server: DiscoveredServer, pin: String) = connectToHost(server.host, pin)
+
+    /** Pairs with a manually entered Mac IP (PIN) and connects to it. */
+    fun connectToManual(host: String, pin: String) = connectToHost(host.trim(), pin)
+
+    private fun connectToHost(host: String, pin: String) {
+        settingsRepository.setManualHost(host)
+        settingsRepository.setPairingPin(pin)
+        settingsRepository.setLastConnectedHost(host)
         connect()
     }
 

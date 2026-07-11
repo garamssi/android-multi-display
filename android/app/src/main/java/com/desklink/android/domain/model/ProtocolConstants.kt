@@ -21,6 +21,9 @@ object ProtocolConstants {
     // returns nothing.
     const val SERVICE_TYPE = "_desklink._tcp"
 
+    /** Bonjour/NSD TXT key the Mac advertises its OS version under (e.g. "macOS 15.4"). */
+    const val TXT_KEY_OS = "os"
+
     // LAN pairing (P3, TLS-PSK). Cross-platform contract with the macOS server: both
     // sides derive the identical pre-shared key from the 6-digit PIN via HKDF-SHA256
     // (RFC 5869) over these parameters, or the TLS-PSK handshake fails. Reference +
