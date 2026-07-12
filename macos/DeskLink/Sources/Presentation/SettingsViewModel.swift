@@ -25,6 +25,10 @@ public final class SettingsViewModel {
     /// The recent DeskLink log text shown in the in-app viewer (empty until loaded).
     public private(set) var logText: String = ""
 
+    /// [logText] parsed into color-taggable lines. Computed once when logs load (not on
+    /// every render), keeping the log-format parsing out of the view.
+    public private(set) var logLines: [DiagnosticLogLine] = []
+
     private let permissions: PermissionsManaging
 
     public init(permissions: PermissionsManaging = SystemPermissions()) {
@@ -90,6 +94,7 @@ public final class SettingsViewModel {
         Task {
             let text = await Self.recentLogText()
             logText = text
+            logLines = DiagnosticLogParser.parse(text)
             let lines = text.split(separator: "\n").count
             diagnosticsStatus = "Last 5 min · \(lines) line\(lines == 1 ? "" : "s")"
         }
@@ -108,6 +113,12 @@ public final class SettingsViewModel {
 
     public func openConsole() {
         NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/Utilities/Console.app"))
+    }
+
+    /// Copies one of the Mac's addresses to the clipboard (the pairing block's copy icon).
+    public func copyAddress(_ address: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(address, forType: .string)
     }
 
     // MARK: - Private

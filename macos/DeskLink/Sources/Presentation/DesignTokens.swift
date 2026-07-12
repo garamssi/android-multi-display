@@ -37,6 +37,13 @@ enum DesignTokens {
 
     static let errorRedText = Color(hex: 0xFF8A8A)
 
+    // Diagnostics console: category tag colors + the panel's dim body/timestamp/bg.
+    // `server` reuses `successGreenText`, `capture` reuses `warningAmber`.
+    static let logStream = Color(hex: 0xAAB4FF)       // indigo — stream category tag
+    static let logTimestamp = Color(hex: 0x5B6270)    // grey mono leading time
+    static let logBody = Color(hex: 0x7F8794)         // message text
+    static let consoleBg = Color(hex: 0x070809)       // console inner background
+
     // Surfaces & borders (white-tinted overlays).
     static let surfaceCard = Color.white.opacity(0.04)      // stats card bg
     static let surfaceChip = Color.white.opacity(0.05)      // "USB · idle" chip
@@ -92,6 +99,8 @@ enum DesignTokens {
         static let primaryButton: CGFloat = 11
         static let ghostRow: CGFloat = 10
         static let statsCard: CGFloat = 12
+        static let card: CGFloat = 13       // status banner, pairing block
+        static let small: CGFloat = 8       // PIN digit chip, console toolbar button
         static let chip: CGFloat = 6
     }
 

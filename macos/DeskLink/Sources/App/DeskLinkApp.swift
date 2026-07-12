@@ -26,7 +26,7 @@ struct DeskLinkApp: App {
 
         // Dedicated Settings window, opened from the menu popover's "Settings…" row.
         Window("DeskLink Settings", id: SettingsWindowID.value) {
-            SettingsView(viewModel: settingsViewModel)
+            SettingsView(viewModel: settingsViewModel, serverViewModel: viewModel)
         }
         // Size the window to its content so it grows/shrinks when the log viewer is
         // toggled, instead of leaving a fixed window with the content floating in it.

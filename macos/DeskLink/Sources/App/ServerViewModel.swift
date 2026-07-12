@@ -32,6 +32,12 @@ public final class ServerViewModel {
     /// spec's "USB 3.2" is shown as a sensible constant.
     public var link: String = "USB"
 
+    /// Whether the running server is also listening on Wi-Fi (LAN). Captured at [start]
+    /// from the persisted opt-in — the same value the coordinator resolves its listener
+    /// scope from — so the UI reflects the live listener, not a later toggle change that
+    /// only takes effect on the next start.
+    public private(set) var wifiListening = false
+
     /// Negotiated output resolution, e.g. "2560×1600". `nil` when idle.
     public private(set) var output: String?
 
@@ -84,6 +90,9 @@ public final class ServerViewModel {
     public func start() {
         guard status == .disconnected else { return }
         status = .connecting
+        // Capture the listener scope for this session up front (the coordinator resolves
+        // its scope from the same flag), so the banner names the transports actually bound.
+        wifiListening = TransportSettings.wifiEnabled
         Task { [weak self] in
             guard let self else { return }
             do {
