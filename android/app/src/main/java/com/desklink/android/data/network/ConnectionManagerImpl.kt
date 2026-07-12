@@ -187,9 +187,10 @@ class ConnectionManagerImpl @Inject constructor(
             controlClient.disconnect()
             false
         } catch (e: PairingAuthException) {
-            // LAN pairing failed (wrong/absent PIN, or server rejected us).
+            // LAN pairing failed (wrong/absent PIN, or server rejected us). Distinct from a
+            // generic REFUSED so the UI can show the wrong-PIN retry flow.
             Log.e(TAG, "pairing authentication failed", e)
-            lastFailureError = ConnectionError.REFUSED
+            lastFailureError = ConnectionError.PAIRING_REJECTED
             controlClient.disconnect()
             false
         } catch (e: Exception) {

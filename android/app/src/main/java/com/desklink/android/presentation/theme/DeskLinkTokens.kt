@@ -86,6 +86,21 @@ object DeskLinkTokens {
     val HandleOpenFill = AccentSolid.copy(alpha = 0.95f) // rgba(91,107,255,.95)
     val HandleOpenBorder = Color(0xFF8C96FF).copy(alpha = 0.6f) // rgba(140,150,255,.6)
 
+    // ---- PIN pairing (screen 01c) -----------------------------------------------
+    /** Lighter indigo used for the tinted glyphs inside accent tiles (rgba 170,180,255). */
+    val AccentIcon = Color(0xFFAAB4FF)
+    val AccentTileBg = AccentLight.copy(alpha = 0.12f)     // lock / device icon tile fill
+    val AccentTileBorder = AccentLight.copy(alpha = 0.30f)
+    val AccentChipBg = AccentLight.copy(alpha = 0.16f)      // device-card inner icon tile
+    val PinSlotFill = AccentLight.copy(alpha = 0.08f)       // entered/empty-active slot fill
+    val PinSlotBorder = AccentLight.copy(alpha = 0.45f)     // filled slot border
+    val PinSlotActiveFill = AccentLight.copy(alpha = 0.14f) // caret slot fill
+    val PinSlotVerifyFill = AccentLight.copy(alpha = 0.10f) // masked verifying slot
+    val PinSlotVerifyBorder = AccentLight.copy(alpha = 0.35f)
+    val PinSlotErrorFill = Error.copy(alpha = 0.08f)
+    val PinSlotErrorBorder = Error.copy(alpha = 0.50f)
+    val PinSlotErrorText = Color(0xFFFF9A9A)
+
     // ---- Gradients (Brushes) ----------------------------------------------------
     /** Primary CTA / selected-segment gradient — CSS `linear-gradient(180deg, …)`. */
     val AccentVertical: Brush = Brush.verticalGradient(
@@ -122,6 +137,8 @@ object DeskLinkTokens {
     val RadiusGlyphSmall = 16.dp
     val RadiusGlyph = 22.dp
     val RadiusSquareButton = 11.dp // 40dp header back square
+    val RadiusPinSlot = 13.dp // PIN digit slot
+    val RadiusKeypadKey = 14.dp // on-screen keypad key
     val RadiusPill = 999.dp
 
     val ShapeGlyph = RoundedCornerShape(RadiusGlyph)
@@ -130,4 +147,6 @@ object DeskLinkTokens {
     val ShapePill = RoundedCornerShape(RadiusPill)
     val ShapeSegmentTrack = RoundedCornerShape(RadiusSegmentTrack)
     val ShapeSegment = RoundedCornerShape(RadiusSegment)
+    val ShapePinSlot = RoundedCornerShape(RadiusPinSlot)
+    val ShapeKeypadKey = RoundedCornerShape(RadiusKeypadKey)
 }

@@ -6,6 +6,7 @@ enum class ConnectionError(val code: Int, val description: String) {
     PROTOCOL_MISMATCH(1001, "Protocol version mismatch"),
     TIMEOUT(1002, "Connection timed out"),
     LOST(1003, "Connection lost"),
+    PAIRING_REJECTED(1004, "Pairing rejected (wrong PIN)"),
 
     // Codec errors (1100-1199)
     ENCODER_INIT_FAILED(1100, "Encoder initialization failed"),

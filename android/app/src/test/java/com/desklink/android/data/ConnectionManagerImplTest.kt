@@ -324,7 +324,7 @@ class ConnectionManagerImplTest {
     }
 
     @Test
-    fun `LAN pairing auth failure surfaces Error REFUSED`() = runTest {
+    fun `LAN pairing auth failure surfaces Error PAIRING_REJECTED`() = runTest {
         val hs = fakeHandshakeClient()
         val key = PairingCrypto.derivePsk("123456")
         val serverNonce = ByteArray(ProtocolConstants.AUTH_NONCE_LENGTH) { it.toByte() }
@@ -345,7 +345,7 @@ class ConnectionManagerImplTest {
         advanceUntilIdle()
 
         assertEquals(
-            ConnectionState.Error(ConnectionError.REFUSED),
+            ConnectionState.Error(ConnectionError.PAIRING_REJECTED),
             manager.connectionState.value,
         )
     }

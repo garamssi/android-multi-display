@@ -70,6 +70,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.desklink.android.domain.model.ConnectionError
 import com.desklink.android.domain.model.ConnectionState
 import com.desklink.android.domain.model.DisplayConfig
 import com.desklink.android.domain.model.TransportMode
@@ -83,6 +84,9 @@ import com.desklink.android.presentation.components.SpinnerRing
 import com.desklink.android.presentation.components.StatusDot
 import com.desklink.android.presentation.theme.DeskLinkTokens
 import com.desklink.android.presentation.theme.PlexSans
+
+/** A Wi-Fi pairing target: a discovered [server] (name + host), or a manual IP (server = null). */
+private data class PairingTarget(val name: String, val host: String, val server: DiscoveredServer?)
 
 @Composable
 fun ConnectionScreen(
@@ -99,14 +103,34 @@ fun ConnectionScreen(
     // Only navigate to Display in response to a Connect the user initiated here.
     var connectRequested by remember { mutableStateOf(false) }
 
-    // Pairing dialogs: a tapped discovered server, or the manual-IP entry.
-    var pairingServer by remember { mutableStateOf<DiscoveredServer?>(null) }
+    // Wi-Fi pairing: the target being paired (a tapped server, or a manual IP), plus the
+    // PIN screen's phase/attempt count. All reset when the target changes.
+    var pairingTarget by remember { mutableStateOf<PairingTarget?>(null) }
     var showEnterIp by remember { mutableStateOf(false) }
+    var pairingPhase by remember(pairingTarget) { mutableStateOf(PairingPhase.Entering) }
+    var pairingAttempts by remember(pairingTarget) { mutableStateOf(0) }
+    var pairingSubmitted by remember(pairingTarget) { mutableStateOf(false) }
 
     LaunchedEffect(state) {
         if (state is ConnectionState.Connected && connectRequested) {
             connectRequested = false
+            pairingTarget = null
             onConnected()
+        }
+    }
+
+    // Drive the PIN screen from the connection result once the user has submitted a PIN:
+    // a wrong PIN shows the retry state; any other failure leaves pairing for the home error.
+    LaunchedEffect(state, pairingTarget) {
+        if (pairingTarget == null || !pairingSubmitted) return@LaunchedEffect
+        val current = state
+        if (current is ConnectionState.Error) {
+            if (current.error == ConnectionError.PAIRING_REJECTED) {
+                pairingAttempts += 1
+                pairingPhase = PairingPhase.WrongPin
+            } else {
+                pairingTarget = null
+            }
         }
     }
 
@@ -116,8 +140,11 @@ fun ConnectionScreen(
         state is ConnectionState.Reconnecting
     val isError = state is ConnectionState.Error
 
+    val pairingTargetNow = pairingTarget
+
     val centerColor =
-        if (isError) DeskLinkTokens.PageRadialErrorCenter else DeskLinkTokens.PageRadialCenter
+        if (isError && pairingTargetNow == null) DeskLinkTokens.PageRadialErrorCenter
+        else DeskLinkTokens.PageRadialCenter
 
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val wPx = constraints.maxWidth.toFloat()
@@ -134,6 +161,31 @@ fun ConnectionScreen(
                 .background(pageBrush),
         ) {
             when {
+                pairingTargetNow != null -> PinEntryContent(
+                    deviceName = pairingTargetNow.name,
+                    host = pairingTargetNow.host,
+                    phase = pairingPhase,
+                    attemptsUsed = pairingAttempts,
+                    onSubmit = { pin ->
+                        pairingSubmitted = true
+                        pairingPhase = PairingPhase.Verifying
+                        connectRequested = true
+                        val server = pairingTargetNow.server
+                        if (server != null) viewModel.connectTo(server, pin)
+                        else viewModel.connectToManual(pairingTargetNow.host, pin)
+                    },
+                    onTryAgain = {
+                        pairingSubmitted = false
+                        pairingPhase = PairingPhase.Entering
+                    },
+                    onBack = {
+                        connectRequested = false
+                        viewModel.disconnect()
+                        pairingTarget = null
+                    },
+                    modifier = Modifier.fillMaxSize(),
+                )
+
                 isBusy -> ConnectingContent(
                     modifier = Modifier.align(Alignment.Center),
                     codecLabel = (state as? ConnectionState.Negotiating)
@@ -161,7 +213,7 @@ fun ConnectionScreen(
                     lastConnectedHost = lastConnectedHost,
                     onStartDiscovery = viewModel::startDiscovery,
                     onStopDiscovery = viewModel::stopDiscovery,
-                    onSelectServer = { pairingServer = it },
+                    onSelectServer = { pairingTarget = PairingTarget(it.name, it.host, it) },
                     onEnterIp = { showEnterIp = true },
                 )
 
@@ -184,7 +236,7 @@ fun ConnectionScreen(
             }
 
             // Top chrome (brand + mode pill + gear) on the home states only.
-            if (!isBusy && !isError) {
+            if (!isBusy && !isError && pairingTargetNow == null) {
                 HomeChrome(
                     transportMode = transportMode,
                     onSettings = onSettings,
@@ -195,28 +247,10 @@ fun ConnectionScreen(
             }
         }
 
-        pairingServer?.let { server ->
-            PairingDialog(
-                title = "Pair with ${server.name}",
-                subtitle = "Enter the 6-digit PIN shown on the Mac (Settings → Connection).",
-                showHostField = false,
-                onConnect = { _, pin ->
-                    connectRequested = true
-                    viewModel.connectTo(server, pin)
-                    pairingServer = null
-                },
-                onDismiss = { pairingServer = null },
-            )
-        }
-
         if (showEnterIp) {
-            PairingDialog(
-                title = "Connect by IP",
-                subtitle = "Enter the Mac's IP and the 6-digit pairing PIN shown on it.",
-                showHostField = true,
-                onConnect = { host, pin ->
-                    connectRequested = true
-                    viewModel.connectToManual(host, pin)
+            EnterIpDialog(
+                onContinue = { host ->
+                    pairingTarget = PairingTarget(name = host, host = host, server = null)
                     showEnterIp = false
                 },
                 onDismiss = { showEnterIp = false },
@@ -654,18 +688,17 @@ private fun RecentPill() {
     }
 }
 
-/** Pairing dialog: PIN (and optionally a host field for manual IP entry). */
+/**
+ * Manual-IP entry: collects the Mac's address, then hands off to the PIN screen. The PIN
+ * itself is entered on [PinEntryContent] (design 01c), keeping one pairing surface.
+ */
 @Composable
-private fun PairingDialog(
-    title: String,
-    subtitle: String,
-    showHostField: Boolean,
-    onConnect: (host: String, pin: String) -> Unit,
+private fun EnterIpDialog(
+    onContinue: (host: String) -> Unit,
     onDismiss: () -> Unit,
 ) {
     var host by remember { mutableStateOf("") }
-    var pin by remember { mutableStateOf("") }
-    val canConnect = pin.length == 6 && (!showHostField || host.isNotBlank())
+    val canContinue = host.isNotBlank()
 
     Dialog(onDismissRequest = onDismiss) {
         Column(
@@ -678,7 +711,7 @@ private fun PairingDialog(
                 .padding(22.dp),
         ) {
             Text(
-                text = title,
+                text = "Connect by IP",
                 color = DeskLinkTokens.TextPrimary,
                 fontFamily = PlexSans,
                 fontSize = 19.sp,
@@ -686,35 +719,26 @@ private fun PairingDialog(
             )
             Spacer(Modifier.height(6.dp))
             Text(
-                text = subtitle,
+                text = "Enter the Mac's IP address. You'll pair with its PIN next.",
                 color = DeskLinkTokens.TextSecondary,
                 fontFamily = PlexSans,
                 fontSize = 13.sp,
             )
             Spacer(Modifier.height(18.dp))
-            if (showHostField) {
-                DialogField(
-                    value = host,
-                    onValueChange = { host = it },
-                    placeholder = "Mac IP address (e.g. 192.168.0.10)",
-                    keyboardType = KeyboardType.Uri,
-                )
-                Spacer(Modifier.height(10.dp))
-            }
             DialogField(
-                value = pin,
-                onValueChange = { new -> pin = new.filter { it.isDigit() }.take(6) },
-                placeholder = "6-digit pairing PIN",
-                keyboardType = KeyboardType.Number,
+                value = host,
+                onValueChange = { host = it },
+                placeholder = "Mac IP address (e.g. 192.168.0.10)",
+                keyboardType = KeyboardType.Uri,
             )
             Spacer(Modifier.height(20.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 OutlineButton(text = "Cancel", onClick = onDismiss, height = 46.dp)
                 Spacer(Modifier.weight(1f))
                 GradientButton(
-                    text = "Connect",
-                    onClick = { onConnect(host, pin) },
-                    enabled = canConnect,
+                    text = "Continue",
+                    onClick = { onContinue(host.trim()) },
+                    enabled = canContinue,
                     height = 46.dp,
                     cornerRadius = 12.dp,
                     fontSize = 15.sp,
