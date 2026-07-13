@@ -44,12 +44,23 @@ public final class SettingsViewModel {
         set { Log.isVerbose = newValue }
     }
 
-    /// The pairing PIN to show for LAN auth (stable; the tablet enters it once to pair).
-    public var pairingPin: String { PairingPin.current }
+    /// The pairing PIN to show for LAN auth. Rotates on a wall-clock schedule while the
+    /// window shows it and no device is connected (see [tickPairing]).
+    public private(set) var pairingPin: String = PairingPin.current
 
-    /// Generates a fresh pairing PIN (invalidates any prior pairing).
-    public func regeneratePairingPin() {
-        PairingPin.regenerate()
+    /// Whole seconds until [pairingPin] rotates, for the countdown under the digits.
+    public private(set) var pairingSecondsRemaining: Int = PairingPin.secondsRemaining()
+
+    /// Advances the pairing PIN lifecycle one tick. Called ~1s while the Settings window
+    /// is open. Rotation is paused while a device is [connected] (the PIN isn't needed and
+    /// is hidden); when idle it rolls the PIN over once its lifetime elapses and refreshes
+    /// the countdown. The age is wall-clock (persisted birth time), so closing and
+    /// reopening the window resumes the same countdown rather than restarting it.
+    public func tickPairing(connected: Bool) {
+        guard !connected else { return }
+        PairingPin.rotateIfExpired()
+        pairingPin = PairingPin.current
+        pairingSecondsRemaining = PairingPin.secondsRemaining()
     }
 
     /// The "Allow Wi-Fi (LAN) connections" opt-in. Held as an observed stored property

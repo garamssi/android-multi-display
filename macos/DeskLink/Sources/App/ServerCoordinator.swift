@@ -154,14 +154,14 @@ public final class ServerCoordinator {
         // The onClientConnected/onClientDisconnected hooks are pure observability:
         // they surface the negotiated ClientInfo + DisplayConfig (device model,
         // resolution, fps, codec) to the UI without altering the streaming flow.
-        // LAN requires PIN pairing (key derived from the displayed PIN); USB does not.
-        let authKey = listenerScope == .localNetwork
-            ? PairingCrypto.derivePSK(pin: PairingPin.current)
-            : nil
+        // LAN requires PIN pairing; the key is derived from the CURRENT displayed PIN at
+        // each connection, so a rotated PIN is honored without restarting the server. USB
+        // (loopback) returns nil and skips auth.
+        let isLan = listenerScope == .localNetwork
         let control = ControlChannelUseCase(
             server: controlServer,
             receiver: controlServer,
-            authKey: authKey,
+            authKeyProvider: { isLan ? PairingCrypto.derivePSK(pin: PairingPin.current) : nil },
             onStreamStart: { [weak self] negotiated in
                 try await self?.bootStreaming(config: negotiated)
             },

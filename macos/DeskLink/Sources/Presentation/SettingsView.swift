@@ -42,11 +42,15 @@ struct SettingsView: View {
         .frame(width: windowWidth, alignment: .topLeading)
         .background(DesignTokens.panelGradient, ignoresSafeAreaEdges: .all)
         .task {
-            // Poll the permission states and local addresses while open so a change made
-            // in System Settings (or a network change) is reflected within ~1.5s.
+            // While open: poll permission states / local addresses so a change made in
+            // System Settings (or a network change) is reflected, and tick the pairing PIN
+            // so an unused code rotates on schedule. Rotation runs only while the window is
+            // open (this task is cancelled on close); the countdown is wall-clock, so it
+            // resumes rather than restarts on reopen.
             while !Task.isCancelled {
                 viewModel.refresh()
-                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                viewModel.tickPairing(connected: serverViewModel.status == .connected)
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
             }
         }
         .onChange(of: showLogs) { _, isShown in
@@ -230,18 +234,20 @@ struct SettingsView: View {
                 isOn: wifiBinding
             )
             if viewModel.wifiEnabled {
-                pairingBlock
+                // The PIN is only shown while no device is streaming — once paired it isn't
+                // needed. ServerStatus.connected means an active client.
+                pairingBlock(connected: serverViewModel.status == .connected)
             }
         }
     }
 
     /// Pairing block: the Mac's address(es) with a copy affordance, the PIN as six
-    /// monospace digit chips, and the amber TLS notice (kept consistent with Android).
-    private var pairingBlock: some View {
+    /// monospace digit chips (hidden once connected), and the amber TLS notice.
+    private func pairingBlock(connected: Bool) -> some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .top, spacing: 22) {
                 addressColumn.frame(maxWidth: .infinity, alignment: .leading)
-                pinColumn
+                pinColumn(connected: connected)
             }
             Rectangle()
                 .fill(DesignTokens.accentLight.opacity(0.16))
@@ -305,24 +311,37 @@ struct SettingsView: View {
         }
     }
 
-    private var pinColumn: some View {
+    private func pinColumn(connected: Bool) -> some View {
         VStack(alignment: .leading, spacing: 7) {
             monoLabel("Pairing PIN")
-            HStack(spacing: 5) {
-                ForEach(Array(viewModel.pairingPin.enumerated()), id: \.offset) { _, digit in
-                    Text(String(digit))
-                        .font(.plexMono(size: 19, weight: .semibold))
-                        .foregroundStyle(Color.white)
-                        .frame(width: 30, height: 38)
-                        .background(
-                            DesignTokens.accentLight.opacity(0.16),
-                            in: RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous)
-                        )
-                        .overlay {
-                            RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous)
-                                .strokeBorder(DesignTokens.accentLight.opacity(0.3), lineWidth: 1)
-                        }
+            if connected {
+                // Paired: the PIN isn't needed and is hidden while a device is streaming.
+                Text("Not needed while connected")
+                    .font(.plexSans(size: 12))
+                    .foregroundStyle(DesignTokens.textTertiary)
+                    .frame(height: 38)
+            } else {
+                HStack(spacing: 5) {
+                    ForEach(Array(viewModel.pairingPin.enumerated()), id: \.offset) { _, digit in
+                        Text(String(digit))
+                            .font(.plexMono(size: 19, weight: .semibold))
+                            .foregroundStyle(Color.white)
+                            .frame(width: 30, height: 38)
+                            .background(
+                                DesignTokens.accentLight.opacity(0.16),
+                                in: RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous)
+                            )
+                            .overlay {
+                                RoundedRectangle(cornerRadius: DesignTokens.Radius.small, style: .continuous)
+                                    .strokeBorder(DesignTokens.accentLight.opacity(0.3), lineWidth: 1)
+                            }
+                    }
                 }
+                Text(viewModel.pairingSecondsRemaining > 0
+                    ? "New code in \(viewModel.pairingSecondsRemaining)s"
+                    : "Refreshing…")
+                    .font(.plexMono(size: 11))
+                    .foregroundStyle(DesignTokens.textTertiary)
             }
         }
     }

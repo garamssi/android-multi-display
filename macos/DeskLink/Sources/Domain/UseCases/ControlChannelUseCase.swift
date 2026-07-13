@@ -38,7 +38,7 @@ public final class ControlChannelUseCase: Sendable {
         server: any StreamServing,
         receiver: any PacketReceiving,
         monitor: ConnectionMonitor = ConnectionMonitor(),
-        authKey: Data? = nil,
+        authKeyProvider: @escaping @Sendable () -> Data? = { nil },
         onStreamStart: @escaping @Sendable (DisplayConfig) async throws -> Void = { _ in },
         onClientConnected: @escaping @Sendable (ClientInfo, DisplayConfig) async -> Void = { _, _ in },
         onClientDisconnected: @escaping @Sendable () async -> Void = { }
@@ -46,7 +46,7 @@ public final class ControlChannelUseCase: Sendable {
         self.server = server
         self.receiver = receiver
         self.monitor = monitor
-        self.authGate = AuthGate(key: authKey)
+        self.authGate = AuthGate(keyProvider: authKeyProvider)
         self.onStreamStart = onStreamStart
         self.onClientConnected = onClientConnected
         self.onClientDisconnected = onClientDisconnected
