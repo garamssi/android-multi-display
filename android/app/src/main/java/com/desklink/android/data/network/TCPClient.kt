@@ -76,6 +76,18 @@ class TCPClient @Inject constructor(
         }
     }
 
+    /**
+     * Bounds subsequent blocking reads to [millis] (0 = block indefinitely). A coroutine
+     * `withTimeout` cannot interrupt a socket read that is already blocked waiting on a
+     * silent server — which is exactly what a wrong pairing PIN looks like, since the
+     * server answers a bad PIN with silence. Capping the read at the socket level lets the
+     * pairing/handshake fail fast; callers restore blocking reads (0) for the long-lived
+     * streaming control loop.
+     */
+    fun setReadTimeout(millis: Int) {
+        socket?.soTimeout = millis
+    }
+
     suspend fun send(type: Byte, payload: ByteArray) = withContext(Dispatchers.IO) {
         val stream = outputStream ?: throw IllegalStateException("Not connected")
         val packet = PacketFramer.frame(type, payload)

@@ -350,6 +350,35 @@ class ConnectionManagerImplTest {
         )
     }
 
+    @Test
+    fun `LAN pairing read timeout (silent server) surfaces Error PAIRING_REJECTED`() = runTest {
+        val hs = fakeHandshakeClient()
+        val key = PairingCrypto.derivePsk("123456")
+        val serverNonce = ByteArray(ProtocolConstants.AUTH_NONCE_LENGTH) { it.toByte() }
+        val client = mockk<TCPClient>(relaxed = true)
+        coEvery { client.connect(any(), any()) } returns Unit
+        coEvery { client.send(any(), any()) } returns Unit
+        coEvery { client.disconnect() } returns Unit
+        every { client.receivePackets() } answers {
+            flow {
+                emit(MessageType.AUTH_CHALLENGE to serverNonce)
+                // The server answers a wrong PIN with silence; the bounded pairing read
+                // times out rather than hanging forever.
+                throw java.net.SocketTimeoutException("read timed out")
+            }
+        }
+        val manager = ConnectionManagerImpl(hs, client, fakeTransport(), withKey(key))
+        manager.managerScope = backgroundScope
+
+        manager.connect(config)
+        advanceUntilIdle()
+
+        assertEquals(
+            ConnectionState.Error(ConnectionError.PAIRING_REJECTED),
+            manager.connectionState.value,
+        )
+    }
+
     private fun handshakeSuccessFlow(): Flow<Pair<Byte, ByteArray>> = flow {
         emit(MessageType.HANDSHAKE_RESPONSE to ByteArray(0))
         emit(MessageType.CONFIG_RESPONSE to ByteArray(0))

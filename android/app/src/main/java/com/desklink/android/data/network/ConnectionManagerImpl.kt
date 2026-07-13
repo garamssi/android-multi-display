@@ -136,26 +136,36 @@ class ConnectionManagerImpl @Inject constructor(
             Log.i(TAG, "connecting control channel to $host:${ProtocolConstants.PORT_CONTROL}")
             controlClient.connect(host, ProtocolConstants.PORT_CONTROL)
 
-            // LAN: mutually authenticate with the pairing PIN over the (TLS) control
-            // channel before the handshake. USB returns a null key and skips this.
-            pairingKeyProvider.currentKey()?.let { key ->
-                Log.i(TAG, "authenticating LAN connection with pairing PIN")
-                withTimeout(ProtocolConstants.HANDSHAKE_TIMEOUT) { runClientAuth(key) }
-            }
+            // Time-box the synchronous connect handshake (pairing auth + handshake) at the
+            // socket level. With blocking reads (soTimeout=0) a coroutine withTimeout cannot
+            // interrupt a read stuck on a silent server — the wrong-PIN case, which the
+            // server answers with silence — so the read timeout is what actually unblocks
+            // it. Restored to blocking reads for the long-lived streaming control loop.
+            controlClient.setReadTimeout(ProtocolConstants.HANDSHAKE_TIMEOUT.toInt())
+            val connected = try {
+                // LAN: mutually authenticate with the pairing PIN over the (TLS) control
+                // channel before the handshake. USB returns a null key and skips this.
+                pairingKeyProvider.currentKey()?.let { key ->
+                    Log.i(TAG, "authenticating LAN connection with pairing PIN")
+                    runClientAuth(key)
+                }
 
-            Log.i(TAG, "control channel connected; sending HANDSHAKE_REQUEST")
+                Log.i(TAG, "control channel connected; sending HANDSHAKE_REQUEST")
 
-            // Advertise the device's REAL native screen size so the Mac's width clamp
-            // (min(requestedWidth, advertisedScreenWidth)) never caps the requested
-            // streaming resolution below the panel's true size.
-            val request = handshakeClient.buildHandshakeRequest(config.nativeWidth, config.nativeHeight)
-            controlClient.send(MessageType.HANDSHAKE_REQUEST, request)
+                // Advertise the device's REAL native screen size so the Mac's width clamp
+                // (min(requestedWidth, advertisedScreenWidth)) never caps the requested
+                // streaming resolution below the panel's true size.
+                val request = handshakeClient.buildHandshakeRequest(config.nativeWidth, config.nativeHeight)
+                controlClient.send(MessageType.HANDSHAKE_REQUEST, request)
 
-            _connectionState.value = ConnectionState.Handshaking("Waiting for server...")
+                _connectionState.value = ConnectionState.Handshaking("Waiting for server...")
 
-            // A-H1: bound the whole handshake exchange by HANDSHAKE_TIMEOUT.
-            val connected = withTimeout(ProtocolConstants.HANDSHAKE_TIMEOUT) {
-                runHandshake(config)
+                // A-H1: bound the whole handshake exchange by HANDSHAKE_TIMEOUT.
+                withTimeout(ProtocolConstants.HANDSHAKE_TIMEOUT) {
+                    runHandshake(config)
+                }
+            } finally {
+                controlClient.setReadTimeout(0)
             }
 
             if (connected) {
@@ -293,33 +303,53 @@ class ConnectionManagerImpl @Inject constructor(
         var authenticated = false
         var done = false
 
-        controlClient.receivePackets()
-            .takeWhile { !done }
-            .collect { (type, payload) ->
-                when (type) {
-                    MessageType.AUTH_CHALLENGE -> {
-                        if (payload.size != ProtocolConstants.AUTH_NONCE_LENGTH) {
+        // Wall-clock deadline for the whole exchange. The server keep-alives (PINGs) an
+        // unauthenticated client every second, so a wrong PIN produces a steady frame
+        // stream (never a read timeout) that would otherwise wait forever for an
+        // AUTH_CONFIRM that never comes. The socket read timeout (soTimeout, set by the
+        // caller) covers the opposite case where the server goes fully silent.
+        val deadlineNanos = System.nanoTime() + ProtocolConstants.HANDSHAKE_TIMEOUT * 1_000_000L
+
+        try {
+            controlClient.receivePackets()
+                .takeWhile { !done }
+                .collect { (type, payload) ->
+                    when (type) {
+                        MessageType.AUTH_CHALLENGE -> {
+                            if (payload.size != ProtocolConstants.AUTH_NONCE_LENGTH) {
+                                done = true
+                                return@collect
+                            }
+                            serverNonce = payload
+                            val proof = PairingAuth.clientProof(key, payload, clientNonce)
+                            controlClient.send(MessageType.AUTH_RESPONSE, clientNonce + proof)
+                        }
+
+                        MessageType.AUTH_CONFIRM -> {
+                            val sNonce = serverNonce
+                            if (sNonce != null &&
+                                PairingAuth.verify(payload, PairingAuth.serverProof(key, sNonce, clientNonce))
+                            ) {
+                                authenticated = true
+                            }
                             done = true
-                            return@collect
                         }
-                        serverNonce = payload
-                        val proof = PairingAuth.clientProof(key, payload, clientNonce)
-                        controlClient.send(MessageType.AUTH_RESPONSE, clientNonce + proof)
-                    }
 
-                    MessageType.AUTH_CONFIRM -> {
-                        val sNonce = serverNonce
-                        if (sNonce != null &&
-                            PairingAuth.verify(payload, PairingAuth.serverProof(key, sNonce, clientNonce))
-                        ) {
-                            authenticated = true
-                        }
-                        done = true
+                        else -> { /* ignore keep-alive/other frames until authenticated */ }
                     }
-
-                    else -> { /* ignore until authenticated */ }
+                    // Stop waiting once the pairing window elapses without a confirm, even
+                    // if keep-alive frames keep arriving.
+                    if (!authenticated && System.nanoTime() >= deadlineNanos) {
+                        throw PairingAuthException("pairing timed out awaiting AUTH_CONFIRM")
+                    }
                 }
-            }
+        } catch (_: java.net.SocketTimeoutException) {
+            // A read timeout with auth still incomplete means the server went silent within
+            // the pairing window (wrong PIN, or it went away) — fail instead of hanging. If
+            // auth already succeeded, the timeout is only the trailing read that lets
+            // takeWhile stop, so it is not a failure.
+            if (!authenticated) throw PairingAuthException("pairing timed out awaiting AUTH_CONFIRM")
+        }
 
         if (!authenticated) throw PairingAuthException("LAN pairing authentication failed")
     }
