@@ -5,11 +5,18 @@ import Foundation
 /// (server / stream / capture / adb), and the human `message`. `timestamp` and `category`
 /// are nil for lines that don't match the log format (e.g. a `log show` preamble); those
 /// render as plain body text.
-struct DiagnosticLogLine: Equatable, Identifiable {
-    let id: Int
-    let timestamp: String?
-    let category: String?
-    let message: String
+public struct DiagnosticLogLine: Equatable, Identifiable {
+    public let id: Int
+    public let timestamp: String?
+    public let category: String?
+    public let message: String
+
+    public init(id: Int, timestamp: String?, category: String?, message: String) {
+        self.id = id
+        self.timestamp = timestamp
+        self.category = category
+        self.message = message
+    }
 }
 
 /// Pure formatter turning the raw `log show --style compact` output for our subsystem into
@@ -51,7 +58,7 @@ enum DiagnosticLogParser {
         let full = NSRange(line.startIndex..<line.endIndex, in: line)
         let timestamp = firstGroup(timestampRegex, in: line, range: full)
 
-        guard let tagMatch = categoryRegex.firstMatch(in: line, range: full),
+        guard let tagMatch = categoryRegex.firstMatch(in: line, options: [], range: full),
               let categoryRange = Range(tagMatch.range(at: 1), in: line),
               let tagRange = Range(tagMatch.range, in: line) else {
             // No category tag: the whole trimmed line is the message.
@@ -69,7 +76,7 @@ enum DiagnosticLogParser {
     private static func firstGroup(
         _ regex: NSRegularExpression, in string: String, range: NSRange
     ) -> String? {
-        guard let match = regex.firstMatch(in: string, range: range),
+        guard let match = regex.firstMatch(in: string, options: [], range: range),
               let group = Range(match.range(at: 1), in: string) else { return nil }
         return String(string[group])
     }
