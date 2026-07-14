@@ -1,9 +1,11 @@
 package com.desklink.android.presentation.connection
 
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.keyframes
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
@@ -19,6 +21,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -28,9 +31,11 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Backspace
 import androidx.compose.material.icons.outlined.ArrowBackIosNew
+import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.DesktopMac
 import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.Lock
+import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -46,59 +51,60 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.desklink.android.domain.model.ConnectionError
 import com.desklink.android.domain.model.ProtocolConstants
 import com.desklink.android.presentation.components.GradientButton
 import com.desklink.android.presentation.components.MonoText
 import com.desklink.android.presentation.components.SpinnerRing
 import com.desklink.android.presentation.theme.DeskLinkTokens
 import com.desklink.android.presentation.theme.PlexSans
+import kotlin.math.roundToInt
 
-/** The three visual states of the Wi-Fi pairing PIN screen (design 01c). */
-enum class PairingPhase { Entering, Verifying, WrongPin }
-
-/**
- * Client-side retry hint shown after a wrong PIN. The Mac's [AuthGate] also enforces its
- * own per-session lockout; because each retry opens a fresh session, this is a UX hint for
- * the user, not a mirror of the server's counter.
- */
-private const val ATTEMPT_HINT_BUDGET = 5
+/** The visual states of the Wi-Fi pairing PIN screen (design 01c). */
+enum class PairingPhase { Entering, Verifying, WrongPin, Reentry }
 
 /**
  * Full-screen Wi-Fi pairing PIN entry (design 01c). The tablet collects the 6-digit code
  * shown on the Mac via an on-screen keypad — no system IME — then auto-submits. Layout is
  * a two-column split on wide landscape and a single centered column otherwise.
  *
- * Pure renderer: it owns only the in-progress [pin] text; the connect attempt, the phase,
- * and the attempt count are driven by the caller from [ConnectionState].
+ * Pure renderer: it owns only the in-progress [pin] text; the phase and remaining attempts
+ * are driven by the caller from the connection result. [onReenter] / [onClear] clear the
+ * field for another try (the caller keeps the attempt counter).
  */
 @Composable
 fun PinEntryContent(
     deviceName: String,
     host: String,
     phase: PairingPhase,
-    attemptsUsed: Int,
+    attemptsLeft: Int,
     onSubmit: (pin: String) -> Unit,
-    onTryAgain: () -> Unit,
+    onReenter: () -> Unit,
+    onClear: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val pinLength = ProtocolConstants.PAIRING_PIN_LENGTH
     var pin by remember { mutableStateOf("") }
-    // Clear the entry whenever we return to Entering (fresh screen or after "Try again").
-    LaunchedEffect(phase) { if (phase == PairingPhase.Entering) pin = "" }
+    // Clear the entry whenever the field is (re-)armed for typing: a fresh screen, or a
+    // retry via "Re-enter PIN" / Clear.
+    LaunchedEffect(phase) {
+        if (phase == PairingPhase.Entering || phase == PairingPhase.Reentry) pin = ""
+    }
+
+    val acceptsInput = phase == PairingPhase.Entering || phase == PairingPhase.Reentry
 
     fun input(digit: Char) {
-        if (phase != PairingPhase.Entering || pin.length >= pinLength) return
+        if (!acceptsInput || pin.length >= pinLength) return
         val next = pin + digit
         pin = next
         if (next.length == pinLength) onSubmit(next)
     }
 
     fun backspace() {
-        if (phase == PairingPhase.Entering && pin.isNotEmpty()) pin = pin.dropLast(1)
+        if (acceptsInput && pin.isNotEmpty()) pin = pin.dropLast(1)
     }
 
     BoxWithConstraints(modifier = modifier.fillMaxSize()) {
@@ -120,11 +126,12 @@ fun PinEntryContent(
                     PinPanel(
                         pin = pin,
                         phase = phase,
-                        attemptsUsed = attemptsUsed,
+                        attemptsLeft = attemptsLeft,
                         compact = false,
                         onInput = ::input,
                         onBackspace = ::backspace,
-                        onTryAgain = onTryAgain,
+                        onReenter = onReenter,
+                        onClear = onClear,
                     )
                 }
             }
@@ -144,11 +151,12 @@ fun PinEntryContent(
                 PinPanel(
                     pin = pin,
                     phase = phase,
-                    attemptsUsed = attemptsUsed,
+                    attemptsLeft = attemptsLeft,
                     compact = true,
                     onInput = ::input,
                     onBackspace = ::backspace,
-                    onTryAgain = onTryAgain,
+                    onReenter = onReenter,
+                    onClear = onClear,
                 )
                 Spacer(Modifier.height(40.dp))
             }
@@ -307,15 +315,62 @@ private fun DeviceChip(deviceName: String, host: String) {
 private fun PinPanel(
     pin: String,
     phase: PairingPhase,
-    attemptsUsed: Int,
+    attemptsLeft: Int,
     compact: Boolean,
     onInput: (Char) -> Unit,
     onBackspace: () -> Unit,
-    onTryAgain: () -> Unit,
+    onReenter: () -> Unit,
+    onClear: () -> Unit,
 ) {
     val pinLength = ProtocolConstants.PAIRING_PIN_LENGTH
+    val slotW = if (compact) 42.dp else 52.dp
+    val slotGap = if (compact) 9.dp else 11.dp
+    // Width of the slot row, so the retry chrome (header / actions) lines up with it.
+    val rowWidth = slotW * pinLength + slotGap * (pinLength - 1)
+
+    // Shake the slots once when a wrong PIN is rejected (design: ~0.5s translateX). Reset
+    // to rest in any other phase so an early retry can't leave the row mid-offset.
+    val shakeX = remember { Animatable(0f) }
+    LaunchedEffect(phase) {
+        if (phase == PairingPhase.WrongPin) {
+            shakeX.snapTo(0f)
+            shakeX.animateTo(
+                targetValue = 0f,
+                animationSpec = keyframes {
+                    durationMillis = 500
+                    (-2f) at 50
+                    4f at 100
+                    (-7f) at 150
+                    7f at 200
+                    (-7f) at 250
+                    7f at 300
+                    (-7f) at 350
+                    4f at 400
+                    (-2f) at 450
+                },
+            )
+        } else {
+            shakeX.snapTo(0f)
+        }
+    }
+
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        PinSlots(pin = pin, phase = phase, compact = compact)
+        if (phase == PairingPhase.Reentry) {
+            ReentryHeader(attemptsLeft = attemptsLeft, width = rowWidth)
+            Spacer(Modifier.height(18.dp))
+        }
+
+        PinSlots(
+            pin = pin,
+            phase = phase,
+            slotWidth = slotW,
+            slotHeight = if (compact) 54.dp else 64.dp,
+            gap = slotGap,
+            digitSize = if (compact) 24.sp else 28.sp,
+            caretHeight = if (compact) 24.dp else 28.dp,
+            modifier = Modifier.offset { IntOffset(shakeX.value.roundToInt(), 0) },
+        )
+
         when (phase) {
             PairingPhase.Entering -> {
                 Spacer(Modifier.height(16.dp))
@@ -325,6 +380,13 @@ private fun PinPanel(
                     fontFamily = PlexSans,
                     fontSize = 12.5.sp,
                 )
+                Spacer(Modifier.height(26.dp))
+                Keypad(compact = compact, onInput = onInput, onBackspace = onBackspace)
+            }
+
+            PairingPhase.Reentry -> {
+                Spacer(Modifier.height(16.dp))
+                FreshPinHint()
                 Spacer(Modifier.height(26.dp))
                 Keypad(compact = compact, onInput = onInput, onBackspace = onBackspace)
             }
@@ -346,7 +408,6 @@ private fun PinPanel(
             }
 
             PairingPhase.WrongPin -> {
-                val remaining = (ATTEMPT_HINT_BUDGET - attemptsUsed).coerceAtLeast(0)
                 Spacer(Modifier.height(22.dp))
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -359,11 +420,7 @@ private fun PinPanel(
                         modifier = Modifier.size(17.dp),
                     )
                     Text(
-                        text = if (remaining > 0) {
-                            "Incorrect PIN - $remaining attempt${if (remaining == 1) "" else "s"} left"
-                        } else {
-                            "Incorrect PIN. Double-check the code on your Mac."
-                        },
+                        text = "Incorrect PIN - $attemptsLeft attempt${if (attemptsLeft == 1) "" else "s"} left",
                         color = DeskLinkTokens.ErrorText,
                         fontFamily = PlexSans,
                         fontSize = 14.5.sp,
@@ -371,17 +428,26 @@ private fun PinPanel(
                     )
                 }
                 Spacer(Modifier.height(20.dp))
-                GradientButton(
-                    text = "Try again",
-                    onClick = onTryAgain,
-                    height = 46.dp,
-                    cornerRadius = 12.dp,
-                    fontSize = 15.sp,
-                    modifier = Modifier.width(260.dp),
-                )
+                Row(
+                    modifier = Modifier.width(rowWidth),
+                    horizontalArrangement = Arrangement.spacedBy(11.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    GradientButton(
+                        text = "Re-enter PIN",
+                        onClick = onReenter,
+                        modifier = Modifier.weight(1f),
+                        leadingIcon = Icons.Outlined.Refresh,
+                        height = 48.dp,
+                        cornerRadius = DeskLinkTokens.RadiusChip,
+                        fontSize = 15.sp,
+                        iconSize = 18.dp,
+                    )
+                    ClearIconButton(onClear = onClear)
+                }
                 Spacer(Modifier.height(16.dp))
                 MonoText(
-                    text = "ERR_${ConnectionError.PAIRING_REJECTED.name}",
+                    text = "ERR_PAIR_PIN_MISMATCH",
                     color = DeskLinkTokens.ErrorChipText,
                     fontSize = 11.sp,
                 )
@@ -390,14 +456,100 @@ private fun PinPanel(
     }
 }
 
+/** Re-entry header: "Try again — enter the new code" + a remaining-attempts pill. */
 @Composable
-private fun PinSlots(pin: String, phase: PairingPhase, compact: Boolean) {
-    val pinLength = ProtocolConstants.PAIRING_PIN_LENGTH
-    val slotW = if (compact) 42.dp else 52.dp
-    val slotH = if (compact) 54.dp else 64.dp
-    val digitSize = if (compact) 24.sp else 28.sp
+private fun ReentryHeader(attemptsLeft: Int, width: androidx.compose.ui.unit.Dp) {
+    Row(
+        modifier = Modifier.width(width),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = "Try again - enter the new code",
+            color = DeskLinkTokens.TextBody,
+            fontFamily = PlexSans,
+            fontSize = 13.5.sp,
+            fontWeight = FontWeight.W500,
+        )
+        Spacer(Modifier.weight(1f))
+        Row(
+            modifier = Modifier
+                .clip(DeskLinkTokens.ShapePill)
+                .background(DeskLinkTokens.ErrorChipBg, DeskLinkTokens.ShapePill)
+                .border(BorderStroke(1.dp, DeskLinkTokens.ErrorTintBorder), DeskLinkTokens.ShapePill)
+                .padding(horizontal = 9.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Icon(
+                imageVector = Icons.Outlined.ErrorOutline,
+                contentDescription = null,
+                tint = DeskLinkTokens.PinSlotErrorText,
+                modifier = Modifier.size(12.dp),
+            )
+            MonoText(
+                text = "$attemptsLeft left",
+                color = DeskLinkTokens.PinSlotErrorText,
+                fontSize = 11.sp,
+            )
+        }
+    }
+}
 
-    Row(horizontalArrangement = Arrangement.spacedBy(if (compact) 9.dp else 11.dp)) {
+/** Mono hint reminding the user the Mac PIN rotates, so they should use the latest. */
+@Composable
+private fun FreshPinHint() {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(7.dp),
+    ) {
+        Icon(
+            imageVector = Icons.Outlined.Refresh,
+            contentDescription = null,
+            tint = DeskLinkTokens.TextTertiary,
+            modifier = Modifier.size(13.dp),
+        )
+        MonoText(
+            text = "A fresh PIN may show on your Mac - use the latest",
+            color = DeskLinkTokens.TextTertiary,
+            fontSize = 11.5.sp,
+        )
+    }
+}
+
+@Composable
+private fun ClearIconButton(onClear: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .size(48.dp)
+            .clip(DeskLinkTokens.ShapeChip)
+            .background(DeskLinkTokens.Surface04, DeskLinkTokens.ShapeChip)
+            .border(BorderStroke(1.dp, DeskLinkTokens.Border14), DeskLinkTokens.ShapeChip)
+            .clickable(onClick = onClear),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = Icons.Outlined.DeleteOutline,
+            contentDescription = "Clear",
+            tint = DeskLinkTokens.TextBody,
+            modifier = Modifier.size(20.dp),
+        )
+    }
+}
+
+@Composable
+private fun PinSlots(
+    pin: String,
+    phase: PairingPhase,
+    slotWidth: androidx.compose.ui.unit.Dp,
+    slotHeight: androidx.compose.ui.unit.Dp,
+    gap: androidx.compose.ui.unit.Dp,
+    digitSize: androidx.compose.ui.unit.TextUnit,
+    caretHeight: androidx.compose.ui.unit.Dp,
+    modifier: Modifier = Modifier,
+) {
+    val pinLength = ProtocolConstants.PAIRING_PIN_LENGTH
+
+    Row(modifier = modifier, horizontalArrangement = Arrangement.spacedBy(gap)) {
         repeat(pinLength) { index ->
             val fill: Color
             val border: Color
@@ -413,7 +565,8 @@ private fun PinSlots(pin: String, phase: PairingPhase, compact: Boolean) {
                     border = DeskLinkTokens.PinSlotErrorBorder
                     textColor = DeskLinkTokens.PinSlotErrorText
                 }
-                PairingPhase.Entering -> {
+                // Entering and Reentry share the active/filled/empty rendering.
+                PairingPhase.Entering, PairingPhase.Reentry -> {
                     val isActive = index == pin.length
                     val isFilled = index < pin.length
                     fill = when {
@@ -432,7 +585,7 @@ private fun PinSlots(pin: String, phase: PairingPhase, compact: Boolean) {
 
             Box(
                 modifier = Modifier
-                    .size(width = slotW, height = slotH)
+                    .size(width = slotWidth, height = slotHeight)
                     .clip(DeskLinkTokens.ShapePinSlot)
                     .background(fill, DeskLinkTokens.ShapePinSlot)
                     .border(BorderStroke(1.5.dp, border), DeskLinkTokens.ShapePinSlot),
@@ -443,11 +596,11 @@ private fun PinSlots(pin: String, phase: PairingPhase, compact: Boolean) {
                         MonoText(text = "•", color = textColor, fontSize = digitSize, fontWeight = FontWeight.W600)
                     PairingPhase.WrongPin ->
                         MonoText(text = pin.getOrNull(index)?.toString() ?: "", color = textColor, fontSize = digitSize, fontWeight = FontWeight.W600)
-                    PairingPhase.Entering -> {
+                    PairingPhase.Entering, PairingPhase.Reentry -> {
                         if (index < pin.length) {
                             MonoText(text = pin[index].toString(), color = textColor, fontSize = digitSize, fontWeight = FontWeight.W600)
                         } else if (index == pin.length) {
-                            Caret(heightDp = if (compact) 24.dp else 28.dp)
+                            Caret(heightDp = caretHeight)
                         }
                     }
                 }

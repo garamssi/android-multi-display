@@ -3,6 +3,7 @@ package com.desklink.android.presentation.connection
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.LinearEasing
@@ -88,6 +89,9 @@ import com.desklink.android.presentation.theme.PlexSans
 /** A Wi-Fi pairing target: a discovered [server] (name + host), or a manual IP (server = null). */
 private data class PairingTarget(val name: String, val host: String, val server: DiscoveredServer?)
 
+/** Wrong-PIN attempts allowed before pairing is aborted and we return to discovery. */
+private const val PIN_ATTEMPT_BUDGET = 3
+
 @Composable
 fun ConnectionScreen(
     onConnected: () -> Unit,
@@ -103,12 +107,14 @@ fun ConnectionScreen(
     // Only navigate to Display in response to a Connect the user initiated here.
     var connectRequested by remember { mutableStateOf(false) }
 
+    val context = LocalContext.current
+
     // Wi-Fi pairing: the target being paired (a tapped server, or a manual IP), plus the
-    // PIN screen's phase/attempt count. All reset when the target changes.
+    // PIN screen's phase and remaining attempts. All reset when the target changes.
     var pairingTarget by remember { mutableStateOf<PairingTarget?>(null) }
     var showEnterIp by remember { mutableStateOf(false) }
     var pairingPhase by remember(pairingTarget) { mutableStateOf(PairingPhase.Entering) }
-    var pairingAttempts by remember(pairingTarget) { mutableStateOf(0) }
+    var pairingAttemptsLeft by remember(pairingTarget) { mutableStateOf(PIN_ATTEMPT_BUDGET) }
     var pairingSubmitted by remember(pairingTarget) { mutableStateOf(false) }
 
     LaunchedEffect(state) {
@@ -119,17 +125,33 @@ fun ConnectionScreen(
         }
     }
 
-    // Drive the PIN screen from the connection result once the user has submitted a PIN:
-    // a wrong PIN shows the retry state; any other failure leaves pairing for the home error.
+    // Drive the PIN screen from the connection result once the user has submitted a PIN.
+    // A wrong PIN spends an attempt and shows the retry state; running out aborts pairing
+    // and returns to the server list with a notice. Any other failure leaves pairing for
+    // the home error screen.
     LaunchedEffect(state, pairingTarget) {
         if (pairingTarget == null || !pairingSubmitted) return@LaunchedEffect
         val current = state
         if (current is ConnectionState.Error) {
-            if (current.error == ConnectionError.PAIRING_REJECTED) {
-                pairingAttempts += 1
-                pairingPhase = PairingPhase.WrongPin
-            } else {
-                pairingTarget = null
+            when (current.error) {
+                ConnectionError.PAIRING_REJECTED -> {
+                    val left = pairingAttemptsLeft - 1
+                    pairingAttemptsLeft = left
+                    if (left <= 0) {
+                        // Too many wrong PINs: clear the error and drop back to discovery.
+                        connectRequested = false
+                        viewModel.disconnect()
+                        pairingTarget = null
+                        Toast.makeText(
+                            context,
+                            "Too many attempts. Check the PIN on your Mac, then try again.",
+                            Toast.LENGTH_LONG,
+                        ).show()
+                    } else {
+                        pairingPhase = PairingPhase.WrongPin
+                    }
+                }
+                else -> pairingTarget = null
             }
         }
     }
@@ -165,7 +187,7 @@ fun ConnectionScreen(
                     deviceName = pairingTargetNow.name,
                     host = pairingTargetNow.host,
                     phase = pairingPhase,
-                    attemptsUsed = pairingAttempts,
+                    attemptsLeft = pairingAttemptsLeft,
                     onSubmit = { pin ->
                         pairingSubmitted = true
                         pairingPhase = PairingPhase.Verifying
@@ -174,9 +196,13 @@ fun ConnectionScreen(
                         if (server != null) viewModel.connectTo(server, pin)
                         else viewModel.connectToManual(pairingTargetNow.host, pin)
                     },
-                    onTryAgain = {
+                    onReenter = {
                         pairingSubmitted = false
-                        pairingPhase = PairingPhase.Entering
+                        pairingPhase = PairingPhase.Reentry
+                    },
+                    onClear = {
+                        pairingSubmitted = false
+                        pairingPhase = PairingPhase.Reentry
                     },
                     onBack = {
                         connectRequested = false
