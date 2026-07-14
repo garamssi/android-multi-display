@@ -26,12 +26,6 @@ import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
 import javax.inject.Singleton
 
-/**
- * Hilt bindings mapping repository implementations to their domain interfaces
- * (A-C4). Concrete impls are constructor-injected (@Inject), so @Binds is enough.
- * Each impl owns its own [com.desklink.android.data.network.TCPClient] for its
- * dedicated channel (control / video / input).
- */
 @Module
 @InstallIn(SingletonComponent::class)
 abstract class AppModule {
@@ -66,9 +60,6 @@ abstract class AppModule {
         impl: UsbStateMonitorImpl,
     ): UsbStateMonitor
 
-    // The channels depend on a single Transport; RoutingTransport picks the USB or LAN
-    // strategy from the user-selected mode (both strategies are @Inject-constructable,
-    // so no extra bindings are needed for them).
     @Binds
     @Singleton
     abstract fun bindTransport(
@@ -87,8 +78,6 @@ abstract class AppModule {
         impl: SharedPreferencesSettingsStore,
     ): SettingsStore
 
-    // RoutingSecureChannel picks plaintext (USB) or TLS (LAN) from the selected mode;
-    // both strategies are @Inject-constructable, so no extra bindings are needed.
     @Binds
     @Singleton
     abstract fun bindSecureChannel(

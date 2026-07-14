@@ -4,11 +4,6 @@ import com.desklink.android.domain.model.TouchEvent
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
-/**
- * Serializes TouchEvent to wire format per protocol spec:
- * Action(1) + X(4 float32) + Y(4 float32) + Pressure(2 uint16) + PointerID(1) + Timestamp(8 int64)
- * Total: 20 bytes
- */
 object TouchSerializer {
 
     fun serialize(event: TouchEvent): ByteArray {

@@ -19,19 +19,12 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
-/**
- * Settings screen ViewModel. Reads/writes the shared [SettingsRepository] so a
- * selection persists across navigation and can be consumed by the connect flow
- * (A-L4). The UI state's initial defaults come from the repository's native-derived
- * config, keeping one consistent default resolution/bitrate across the app.
- */
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
     private val settingsRepository: SettingsRepository,
     private val peerDiscovery: PeerDiscovery,
 ) : ViewModel() {
 
-    /** Servers discovered on the LAN (empty until [startDiscovery] runs). */
     private val _discoveredServers = MutableStateFlow<List<DiscoveredServer>>(emptyList())
     val discoveredServers: StateFlow<List<DiscoveredServer>> = _discoveredServers.asStateFlow()
 
@@ -47,9 +40,6 @@ class SettingsViewModel @Inject constructor(
         ) { config, sensitivity, naturalScroll, transportMode, manualHost ->
             config.toUiState(sensitivity, naturalScroll, transportMode, manualHost)
         }
-            // combine() is typed only up to 5 flows; touchInputEnabled is folded in as a
-            // sixth source via a nested combine + copy rather than dropping to the untyped
-            // vararg overload.
             .combine(settingsRepository.touchInputEnabled) { state, touchInputEnabled ->
                 state.copy(touchInputEnabled = touchInputEnabled)
             }
@@ -72,7 +62,6 @@ class SettingsViewModel @Inject constructor(
 
     fun setResolution(width: Int, height: Int) = settingsRepository.setResolution(width, height)
 
-    /** Reset the streaming resolution to the device's real native size. */
     fun useNativeResolution() =
         settingsRepository.setResolution(settingsRepository.nativeWidth, settingsRepository.nativeHeight)
 
@@ -94,7 +83,6 @@ class SettingsViewModel @Inject constructor(
 
     fun setManualHost(value: String) = settingsRepository.setManualHost(value)
 
-    /** Begins LAN discovery (call only after the Wi-Fi permission is granted). Idempotent. */
     fun startDiscovery() {
         if (discoveryJob?.isActive == true) return
         discoveryJob = viewModelScope.launch {
@@ -102,14 +90,12 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
-    /** Stops LAN discovery and clears the list (releases the multicast lock). */
     fun stopDiscovery() {
         discoveryJob?.cancel()
         discoveryJob = null
         _discoveredServers.value = emptyList()
     }
 
-    /** Selects a discovered server as the LAN dial target (fills the manual host). */
     fun selectDiscoveredServer(server: DiscoveredServer) =
         settingsRepository.setManualHost(server.host)
 
@@ -118,7 +104,6 @@ class SettingsViewModel @Inject constructor(
         stopDiscovery()
     }
 
-    /** The current user selection as a [DisplayConfig] (used by the connect flow). */
     fun toDisplayConfig(): DisplayConfig = settingsRepository.current()
 
     private fun DisplayConfig.toUiState(
@@ -156,11 +141,9 @@ data class SettingsUiState(
     val touchInputEnabled: Boolean = true,
     val rotation: DisplayRotation = DisplayRotation.ROTATION_0,
 ) {
-    /** True when the current streaming resolution equals the device's native size. */
     val isNativeSelected: Boolean get() = width == nativeWidth && height == nativeHeight
 
     companion object {
-        /** Fixed resolution presets shown below the dynamic "Native" option. */
         val RESOLUTION_PRESETS = listOf(
             2560 to 1600,
             1920 to 1200,
@@ -168,36 +151,28 @@ data class SettingsUiState(
         )
         val FPS_OPTIONS = listOf(30, 60, 120)
 
-        /** Bitrate presets: Low / Medium / High (10 / 20 / 40 Mbps). */
         val BITRATE_OPTIONS = listOf(
             BitrateOption(10_000, "Low"),
             BitrateOption(20_000, "Medium"),
             BitrateOption(40_000, "High"),
         )
 
-        /** Scroll speed presets (sensitivity multiplier applied on the tablet). */
         val SCROLL_SPEED_OPTIONS = listOf(
             ScrollSpeedOption(1.5f, "Slow"),
             ScrollSpeedOption(3.0f, "Normal"),
             ScrollSpeedOption(5.0f, "Fast"),
         )
 
-        /** Scroll direction options. Natural = content follows the fingers (macOS
-         *  default); Reversed inverts it. Applied on the tablet before sending. */
         val SCROLL_DIRECTION_OPTIONS = listOf(
             ScrollDirectionOption(natural = true, label = "Natural"),
             ScrollDirectionOption(natural = false, label = "Reversed"),
         )
 
-        /** Touch input options. On forwards pointer/scroll events to the Mac (current
-         *  behavior); Off makes the mirror view-only (rendering continues). */
         val TOUCH_INPUT_OPTIONS = listOf(
             TouchInputOption(enabled = true, label = "On"),
             TouchInputOption(enabled = false, label = "Off"),
         )
 
-        /** Screen rotation options (0/90/180/270). Portrait (90/270) changes the geometry
-         *  requested from the Mac; the 180-flip part is applied on the tablet. */
         val ROTATION_OPTIONS = listOf(
             DisplayRotation.ROTATION_0,
             DisplayRotation.ROTATION_90,
@@ -207,14 +182,10 @@ data class SettingsUiState(
     }
 }
 
-/** A selectable bitrate preset with a human label. */
 data class BitrateOption(val kbps: Int, val label: String)
 
-/** A selectable scroll-speed preset (sensitivity multiplier) with a human label. */
 data class ScrollSpeedOption(val sensitivity: Float, val label: String)
 
-/** A selectable scroll-direction preset with a human label. */
 data class ScrollDirectionOption(val natural: Boolean, val label: String)
 
-/** A selectable touch-input preset with a human label. */
 data class TouchInputOption(val enabled: Boolean, val label: String)

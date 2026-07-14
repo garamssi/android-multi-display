@@ -7,13 +7,6 @@ import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
-/**
- * Recognition rules for the single-finger long-press mapped to a right-click:
- *  - a stationary hold past the threshold fires exactly once;
- *  - it never fires before the threshold;
- *  - lifting, moving beyond the slop, or a second finger disqualifies it;
- *  - the DOWN position is captured as the right-click anchor.
- */
 class LongPressDetectorTest {
 
     @Test
@@ -21,7 +14,6 @@ class LongPressDetectorTest {
         val d = LongPressDetector(longPressThresholdMs = 500L)
         d.onEvent(PointerPhase.DOWN, 1, 0, 100f, 200f)
         assertTrue(d.fireIfElapsed(500L))
-        // A second check must not fire again for the same press.
         assertFalse(d.fireIfElapsed(600L))
     }
 

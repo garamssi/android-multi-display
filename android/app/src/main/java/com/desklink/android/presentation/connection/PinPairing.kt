@@ -62,18 +62,8 @@ import com.desklink.android.presentation.theme.DeskLinkTokens
 import com.desklink.android.presentation.theme.PlexSans
 import kotlin.math.roundToInt
 
-/** The visual states of the Wi-Fi pairing PIN screen (design 01c). */
 enum class PairingPhase { Entering, Verifying, WrongPin, Reentry }
 
-/**
- * Full-screen Wi-Fi pairing PIN entry (design 01c). The tablet collects the 6-digit code
- * shown on the Mac via an on-screen keypad — no system IME — then auto-submits. Layout is
- * a two-column split on wide landscape and a single centered column otherwise.
- *
- * Pure renderer: it owns only the in-progress [pin] text; the phase and remaining attempts
- * are driven by the caller from the connection result. [onReenter] / [onClear] clear the
- * field for another try (the caller keeps the attempt counter).
- */
 @Composable
 fun PinEntryContent(
     deviceName: String,
@@ -88,8 +78,6 @@ fun PinEntryContent(
 ) {
     val pinLength = ProtocolConstants.PAIRING_PIN_LENGTH
     var pin by remember { mutableStateOf("") }
-    // Clear the entry whenever the field is (re-)armed for typing: a fresh screen, or a
-    // retry via "Re-enter PIN" / Clear.
     LaunchedEffect(phase) {
         if (phase == PairingPhase.Entering || phase == PairingPhase.Reentry) pin = ""
     }
@@ -192,7 +180,6 @@ private fun BackButton(onBack: () -> Unit, modifier: Modifier = Modifier) {
     }
 }
 
-/** Left/top context: lock glyph, title, subtitle, and (wide only) device chip + TLS note. */
 @Composable
 private fun PairingContext(deviceName: String, host: String, compact: Boolean) {
     Column(
@@ -310,7 +297,6 @@ private fun DeviceChip(deviceName: String, host: String) {
     }
 }
 
-/** Right/lower panel: the slot row plus keypad / spinner / error, keyed on [phase]. */
 @Composable
 private fun PinPanel(
     pin: String,
@@ -325,11 +311,8 @@ private fun PinPanel(
     val pinLength = ProtocolConstants.PAIRING_PIN_LENGTH
     val slotW = if (compact) 42.dp else 52.dp
     val slotGap = if (compact) 9.dp else 11.dp
-    // Width of the slot row, so the retry chrome (header / actions) lines up with it.
     val rowWidth = slotW * pinLength + slotGap * (pinLength - 1)
 
-    // Shake the slots once when a wrong PIN is rejected (design: ~0.5s translateX). Reset
-    // to rest in any other phase so an early retry can't leave the row mid-offset.
     val shakeX = remember { Animatable(0f) }
     LaunchedEffect(phase) {
         if (phase == PairingPhase.WrongPin) {
@@ -456,7 +439,6 @@ private fun PinPanel(
     }
 }
 
-/** Re-entry header: "Try again — enter the new code" + a remaining-attempts pill. */
 @Composable
 private fun ReentryHeader(attemptsLeft: Int, width: androidx.compose.ui.unit.Dp) {
     Row(
@@ -495,7 +477,6 @@ private fun ReentryHeader(attemptsLeft: Int, width: androidx.compose.ui.unit.Dp)
     }
 }
 
-/** Mono hint reminding the user the Mac PIN rotates, so they should use the latest. */
 @Composable
 private fun FreshPinHint() {
     Row(
@@ -565,7 +546,6 @@ private fun PinSlots(
                     border = DeskLinkTokens.PinSlotErrorBorder
                     textColor = DeskLinkTokens.PinSlotErrorText
                 }
-                // Entering and Reentry share the active/filled/empty rendering.
                 PairingPhase.Entering, PairingPhase.Reentry -> {
                     val isActive = index == pin.length
                     val isFilled = index < pin.length
@@ -609,7 +589,6 @@ private fun PinSlots(
     }
 }
 
-/** Blinking caret shown in the active (next-to-fill) slot. */
 @Composable
 private fun Caret(heightDp: androidx.compose.ui.unit.Dp) {
     val transition = rememberInfiniteTransition(label = "caret")

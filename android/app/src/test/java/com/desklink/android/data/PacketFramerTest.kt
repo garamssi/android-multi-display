@@ -15,19 +15,15 @@ class PacketFramerTest {
         val payload = byteArrayOf(0x01, 0x02, 0x03)
         val packet = PacketFramer.frame(MessageType.PING, payload)
 
-        // Total: 4 (length) + 1 (type) + 3 (payload) = 8
         assertEquals(8, packet.size)
 
-        // Length field (big-endian): 4 = 1 (type) + 3 (payload)
         assertEquals(0, packet[0].toInt())
         assertEquals(0, packet[1].toInt())
         assertEquals(0, packet[2].toInt())
         assertEquals(4, packet[3].toInt())
 
-        // Type byte
         assertEquals(MessageType.PING, packet[4])
 
-        // Payload
         assertArrayEquals(payload, packet.copyOfRange(5, 8))
     }
 
@@ -76,8 +72,6 @@ class PacketFramerTest {
         }
     }
 
-    // ---- A-C2 boundary tests (size math in Long) ----
-
     private fun header(lengthField: Long): ByteArray = byteArrayOf(
         ((lengthField ushr 24) and 0xFF).toByte(),
         ((lengthField ushr 16) and 0xFF).toByte(),
@@ -88,12 +82,8 @@ class PacketFramerTest {
 
     @Test
     fun `unframe accepts exactly 4MB packet length`() {
-        // packetLength == MAX_PACKET_SIZE (type + payload). Only the header needs to
-        // be present to reach the size checks; the body would be NeedMoreData, but
-        // MAX itself must NOT be rejected as too large.
         val max = ProtocolConstants.MAX_PACKET_SIZE.toLong()
         val result = PacketFramer.unframe(header(max))
-        // Header-only buffer: valid length, just not enough body yet.
         assertTrue(
             result is PacketFramer.UnframeResult.NeedMoreData,
             "4MB length must be accepted (needs more data), got $result",
@@ -115,8 +105,7 @@ class PacketFramerTest {
 
     @Test
     fun `unframe rejects would-be-negative unsigned length`() {
-        // 0xFFFFFFFF read as signed Int would be -1; unsigned Long it is ~4.29e9,
-        // which exceeds MAX and must be rejected as an Error, never a huge alloc.
+        // 0xFFFFFFFF as signed Int is -1; as unsigned Long it exceeds MAX, must be rejected.
         val result = PacketFramer.unframe(header(0xFFFFFFFFL))
         assertTrue(
             result is PacketFramer.UnframeResult.Error,
@@ -128,7 +117,6 @@ class PacketFramerTest {
     fun `unframe needs more data when body incomplete`() {
         val payload = ByteArray(100) { it.toByte() }
         val packet = PacketFramer.frame(MessageType.VIDEO_FRAME, payload)
-        // Feed everything except the last byte.
         val result = PacketFramer.unframe(packet, 0, packet.size - 1)
         assertTrue(result is PacketFramer.UnframeResult.NeedMoreData)
     }

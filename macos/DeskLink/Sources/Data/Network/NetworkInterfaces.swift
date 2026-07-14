@@ -1,12 +1,7 @@
 import Foundation
 
-/// Resolves the Mac's local-network IPv4 addresses so the Settings window can show the
-/// user which address to type into the tablet for a manual LAN connection (there is no
-/// discovery in this phase). Best-effort: returns the non-loopback IPv4 addresses of
-/// interfaces that are currently up.
 enum NetworkInterfaces {
 
-    /// Non-loopback IPv4 addresses currently assigned to active interfaces.
     static func localIPv4Addresses() -> [String] {
         var addresses: [String] = []
         var head: UnsafeMutablePointer<ifaddrs>?
@@ -31,7 +26,6 @@ enum NetworkInterfaces {
         guard sockaddrPtr.pointee.sa_family == UInt8(AF_INET) else { return nil }
 
         let flags = Int32(bitPattern: entry.ifa_flags)
-        // Only interfaces that are up, and never loopback (we want reachable LAN IPs).
         guard flags & IFF_UP == IFF_UP else { return nil }
         guard flags & IFF_LOOPBACK == 0 else { return nil }
 
@@ -46,8 +40,7 @@ enum NetworkInterfaces {
             NI_NUMERICHOST
         )
         guard result == 0 else { return nil }
-        // getnameinfo writes a null-terminated numeric host; decode up to the null.
-        // (String(cString: [CChar]) is deprecated — decode the UTF-8 bytes instead.)
+        // String(cString:) is deprecated; decode the null-terminated bytes as UTF-8 instead.
         let bytes = host.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
         let address = String(decoding: bytes, as: UTF8.self)
         return address.isEmpty ? nil : address

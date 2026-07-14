@@ -48,14 +48,10 @@ public final class VirtualDisplayManager: VirtualDisplayManaging, @unchecked Sen
         }
     }
 
-    /// The CGDirectDisplayID of the virtual display, or 0 if inactive.
     public var displayID: UInt32 {
         lock.withLock { bridge.displayID }
     }
 
-    /// The display's actual active pixel resolution, or nil if inactive/unavailable.
-    /// Used to surface a private-API mode fallback (e.g. the 1280x800 bug) in the logs
-    /// without failing the connection.
     public var activeResolution: (width: Int, height: Int)? {
         let id = lock.withLock { bridge.displayID }
         guard id != 0, let mode = CGDisplayCopyDisplayMode(id) else { return nil }

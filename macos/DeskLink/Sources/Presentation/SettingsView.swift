@@ -1,30 +1,18 @@
 import SwiftUI
 
-/// Stable identifier for the Settings `Window` scene, opened from the menu popover.
 enum SettingsWindowID {
     static let value = "settings"
 }
 
-/// The Settings window: server status/control, macOS permissions, Wi-Fi pairing, and
-/// diagnostics. A pure renderer over `SettingsViewModel` (permissions/logs/pairing) and
-/// `ServerViewModel` (run state + Start/Stop, shared with the menu-bar popover); all
-/// platform work lives in those view-models.
 @MainActor
 struct SettingsView: View {
     let viewModel: SettingsViewModel
-    /// Shared with the menu-bar popover so the banner reflects — and controls — the same
-    /// server. The popover stays the primary control; this is a convenience mirror.
     let serverViewModel: ServerViewModel
 
-    /// The log viewer is hidden by default; the user opts in via "Show log viewer".
-    /// As view `@State` it resets to hidden each time the window is (re)opened.
     @State private var showLogs = false
 
     private enum PermissionKind { case accessibility, screenRecording }
 
-    /// Fixed window width from the handoff (02 · macOS Server Settings). Height follows
-    /// the content (`.windowResizability(.contentSize)`), growing when the log console
-    /// or pairing block is revealed.
     private let windowWidth: CGFloat = 560
 
     var body: some View {
@@ -42,11 +30,6 @@ struct SettingsView: View {
         .frame(width: windowWidth, alignment: .topLeading)
         .background(DesignTokens.panelGradient, ignoresSafeAreaEdges: .all)
         .task {
-            // While open: poll permission states / local addresses so a change made in
-            // System Settings (or a network change) is reflected, and tick the pairing PIN
-            // so an unused code rotates on schedule. Rotation runs only while the window is
-            // open (this task is cancelled on close); the countdown is wall-clock, so it
-            // resumes rather than restarts on reopen.
             while !Task.isCancelled {
                 viewModel.refresh()
                 viewModel.tickPairing(connected: serverViewModel.status == .connected)
@@ -234,15 +217,11 @@ struct SettingsView: View {
                 isOn: wifiBinding
             )
             if viewModel.wifiEnabled {
-                // The PIN is only shown while no device is streaming — once paired it isn't
-                // needed. ServerStatus.connected means an active client.
                 pairingBlock(connected: serverViewModel.status == .connected)
             }
         }
     }
 
-    /// Pairing block: the Mac's address(es) with a copy affordance, the PIN as six
-    /// monospace digit chips (hidden once connected), and the amber TLS notice.
     private func pairingBlock(connected: Bool) -> some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .top, spacing: 22) {
@@ -315,7 +294,6 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 7) {
             monoLabel("Pairing PIN")
             if connected {
-                // Paired: the PIN isn't needed and is hidden while a device is streaming.
                 Text("Not needed while connected")
                     .font(.plexSans(size: 12))
                     .foregroundStyle(DesignTokens.textTertiary)
@@ -371,8 +349,6 @@ struct SettingsView: View {
         }
     }
 
-    /// Bounded, color-tagged console: a toolbar (Refresh / Copy / Open Console + the
-    /// "Last 5 min · N lines" status) above a scrollable log body capped at 236pt.
     private var console: some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
@@ -429,9 +405,6 @@ struct SettingsView: View {
         .lineSpacing(6)
     }
 
-    /// Composes one console line as a single `Text` with per-run color: grey timestamp,
-    /// category tag in its source color, dim body. Concatenation requires `Text` (not a
-    /// generic `View`), so each run uses `Text.foregroundStyle` which returns `Text`.
     private func consoleRow(_ line: DiagnosticLogLine) -> Text {
         var text = Text("")
         if let timestamp = line.timestamp {
@@ -443,8 +416,6 @@ struct SettingsView: View {
         return text + Text(line.message).foregroundStyle(DesignTokens.logBody)
     }
 
-    /// Maps a log category to its tag color. Keyed off `Log.Category` raw values so the
-    /// mapping tracks the real categories instead of duplicating string literals.
     private func categoryColor(_ category: String) -> Color {
         switch category {
         case Log.Category.server.rawValue: return DesignTokens.successGreenText

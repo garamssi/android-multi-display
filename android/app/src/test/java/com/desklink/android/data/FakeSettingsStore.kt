@@ -2,11 +2,6 @@ package com.desklink.android.data
 
 import com.desklink.android.data.settings.SettingsStore
 
-/**
- * In-memory [SettingsStore] for unit tests. Sharing one instance across two
- * [com.desklink.android.data.settings.SettingsRepository] constructions simulates an app
- * restart (new repository, same persisted store).
- */
 class FakeSettingsStore : SettingsStore {
     private val values = mutableMapOf<String, Any>()
 

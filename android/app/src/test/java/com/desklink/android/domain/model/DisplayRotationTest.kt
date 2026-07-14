@@ -5,10 +5,6 @@ import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
-/**
- * The 0/90/180/270 rotation decomposition: portrait geometry (sent to the Mac) vs the
- * tablet-only 180 flip. 90 vs 270 differ only by the flip bit.
- */
 class DisplayRotationTest {
 
     @Test

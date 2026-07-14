@@ -1,11 +1,5 @@
 import Foundation
 
-/// Handles the control channel handshake protocol:
-/// 1. Receive HANDSHAKE_REQUEST from client
-/// 2. Send HANDSHAKE_RESPONSE
-/// 3. Receive CONFIG_REQUEST
-/// 4. Send CONFIG_RESPONSE with negotiated settings
-/// 5. Send START_STREAM when ready
 public final class HandshakeHandler: Sendable {
     public init() {}
 
@@ -54,15 +48,10 @@ public final class HandshakeHandler: Sendable {
         let requestedCodec = (json["codec"] as? String ?? "hevc").lowercased()
         let requestedBitrate = json["bitrateKbps"] as? Int ?? 20_000
 
-        // S-M5: reject zero/invalid resolution (CONFIG_INVALID / 1400) before
-        // negotiating. A non-positive dimension cannot produce a valid display.
         guard requestedWidth > 0, requestedHeight > 0 else {
             throw ConnectionError.configInvalid
         }
 
-        // S-M4: validate the requested codec against the client's advertised
-        // supportedCodecs. Reject unknown or unsupported codecs
-        // (CODEC_NOT_SUPPORTED / 1104).
         let supported = Set(clientInfo.supportedCodecs.map { $0.lowercased() })
         guard requestedCodec == "hevc" || requestedCodec == "h264" else {
             throw ConnectionError.codecNotSupported
@@ -71,11 +60,7 @@ public final class HandshakeHandler: Sendable {
             throw ConnectionError.codecNotSupported
         }
 
-        // Negotiate: clamp to the tablet panel. The requested resolution may be in
-        // either orientation (a portrait request carries height > width), so clamp the
-        // long/short edges against the panel's long/short edges and then restore the
-        // requested orientation. A naive per-axis min() would shrink a portrait
-        // request's height down to the panel's landscape height and distort it.
+        // Clamp long/short edges (not per-axis min): a portrait request otherwise gets shrunk to the panel's landscape height and distorted.
         let panelLong = max(clientInfo.screenWidth, clientInfo.screenHeight)
         let panelShort = min(clientInfo.screenWidth, clientInfo.screenHeight)
         let requestedLong = max(requestedWidth, requestedHeight)
@@ -89,8 +74,6 @@ public final class HandshakeHandler: Sendable {
         let codec: DisplayConfig.Codec = requestedCodec == "h264" ? .h264 : .hevc
         let bitrate = max(1000, min(requestedBitrate, 40_000))
 
-        // Guard against a clamp that would zero out a dimension (e.g. client
-        // advertised a non-positive screen size).
         guard width > 0, height > 0, fps > 0 else {
             throw ConnectionError.configInvalid
         }
@@ -107,7 +90,6 @@ public final class HandshakeHandler: Sendable {
         return (response, config)
     }
 
-    /// Builds an ERROR (0x09) payload for the given connection error, per spec §3.10.
     public func makeErrorMessage(_ error: ConnectionError, message: String? = nil) -> Data {
         let json: [String: Any] = [
             "code": error.rawValue,
@@ -138,7 +120,6 @@ public final class HandshakeHandler: Sendable {
     }
 
     public func makeStartStreamMessage() -> Data {
-        // START_STREAM has no payload
         return Data()
     }
 

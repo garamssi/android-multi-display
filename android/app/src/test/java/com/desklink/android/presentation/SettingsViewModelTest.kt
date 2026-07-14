@@ -26,10 +26,6 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 
-/**
- * Unit tests for the Settings option -> DisplayConfig mapping and for the
- * native-resolution detection wired through an injected [ScreenMetricsProvider].
- */
 @OptIn(ExperimentalCoroutinesApi::class)
 class SettingsViewModelTest {
 
@@ -47,7 +43,6 @@ class SettingsViewModelTest {
             store,
         )
 
-    /** PeerDiscovery double emitting a fixed server list. */
     private class FakeDiscovery(
         private val flow: Flow<List<DiscoveredServer>> = flowOf(emptyList()),
     ) : PeerDiscovery {
@@ -99,7 +94,6 @@ class SettingsViewModelTest {
         assertEquals(30, config.fps)
         assertEquals(10_000, config.bitrateKbps)
         assertEquals(DisplayConfig.Codec.H264, config.codec)
-        // Native size is preserved even after choosing a smaller streaming resolution.
         assertEquals(2560, config.nativeWidth)
         assertEquals(1600, config.nativeHeight)
         assertFalse(config.width == config.nativeWidth && config.height == config.nativeHeight)
@@ -175,7 +169,6 @@ class SettingsViewModelTest {
         repo.setTouchInputEnabled(false)
         assertFalse(repo.currentTouchInputEnabled())
 
-        // New repository, same store == app restart: the choice is restored.
         assertFalse(repository(store = store).currentTouchInputEnabled())
     }
 
@@ -190,7 +183,6 @@ class SettingsViewModelTest {
             com.desklink.android.domain.model.DisplayRotation.ROTATION_270,
             repo.currentDisplayRotation(),
         )
-        // New repository, same store == app restart: the choice is restored.
         assertEquals(
             com.desklink.android.domain.model.DisplayRotation.ROTATION_270,
             repository(store = store).currentDisplayRotation(),
@@ -242,7 +234,6 @@ class SettingsViewModelTest {
         first.setResolution(1920, 1200)
         first.setCodec(DisplayConfig.Codec.H264)
 
-        // New repository, same store == app restart: persisted choices are restored.
         val restarted = repository(store = store)
         assertEquals(TransportMode.LAN, restarted.currentTransportMode())
         assertEquals("192.168.0.5", restarted.currentManualHost())
@@ -261,7 +252,6 @@ class SettingsViewModelTest {
         repo.setPairingPin("12ab34-56789")
 
         assertEquals("123456", repo.currentPairingPin()) // digits only, capped at 6
-        // Survives a restart (new repository, same store).
         assertEquals("123456", repository(store = store).currentPairingPin())
     }
 

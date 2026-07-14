@@ -7,11 +7,7 @@ import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
-/**
- * Pins the mutual-auth proofs to the cross-platform golden vectors (tools/protocol_vectors.py,
- * AUTH_*). The macOS PairingAuthTests assert the identical values, so a proof mismatch on
- * either side (which would fail the LAN handshake) fails a unit test.
- */
+// Golden vectors shared with tools/protocol_vectors.py (AUTH_*) and macOS PairingAuthTests; a mismatch fails the LAN handshake.
 class PairingAuthTest {
 
     private fun ByteArray.hex(): String = joinToString("") { "%02x".format(it) }

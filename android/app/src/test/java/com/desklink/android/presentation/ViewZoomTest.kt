@@ -6,11 +6,6 @@ import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
-/**
- * Pinch/pan math for the local mirror zoom: scale clamps to [1, maxScale], the focal point
- * stays fixed under the fingers, the offset clamps so the content always covers the
- * viewport, screen->content mapping inverts the transform, and zooming back out resets.
- */
 class ViewZoomTest {
 
     private val w = 1000f
@@ -31,7 +26,6 @@ class ViewZoomTest {
 
         assertEquals(2f, z.scale, EPS)
         assertTrue(z.isZoomed)
-        // The content under the focal screen point (center) is unchanged: still 0.5.
         assertEquals(0.5f, z.contentNormalizedX(500f, w), EPS)
         assertEquals(0.5f, z.contentNormalizedY(500f, h), EPS)
     }
@@ -58,7 +52,6 @@ class ViewZoomTest {
     fun `content mapping inverts the transform when zoomed`() {
         val z = ViewZoom(maxScale = 4f)
         z.pinch(ratio = 2f, fx = 0f, fy = 0f, viewW = w, viewH = h) // top-left focal -> offset 0
-        // At 2x anchored top-left, the visible right edge (screen 1000) is content 0.5.
         assertEquals(0f, z.contentNormalizedX(0f, w), EPS)
         assertEquals(0.5f, z.contentNormalizedX(1000f, w), EPS)
     }
@@ -77,12 +70,10 @@ class ViewZoomTest {
     @Test
     fun `flip inverts the screen-to-content mapping at identity`() {
         val z = ViewZoom()
-        // Without flip a point near the left maps near 0; flipped, it maps near 1.
         assertEquals(0.25f, z.contentNormalizedX(250f, w), EPS)
         assertEquals(0.75f, z.contentNormalizedX(250f, w, flipped = true), EPS)
         assertEquals(0.2f, z.contentNormalizedY(200f, h), EPS)
         assertEquals(0.8f, z.contentNormalizedY(200f, h, flipped = true), EPS)
-        // Center is unchanged by a 180 flip.
         assertEquals(0.5f, z.contentNormalizedX(500f, w, flipped = true), EPS)
     }
 
@@ -90,7 +81,6 @@ class ViewZoomTest {
     fun `flip composes with zoom`() {
         val z = ViewZoom(maxScale = 4f)
         z.pinch(ratio = 2f, fx = 500f, fy = 500f, viewW = w, viewH = h)
-        // Flipped mapping equals the unflipped mapping of the mirrored screen point.
         val screenX = 300f
         assertEquals(
             z.contentNormalizedX(w - screenX, w),

@@ -20,10 +20,6 @@ class SendTouchUseCase @Inject constructor(
         inputRepository.sendScroll(deltaX, deltaY)
     }
 
-    /**
-     * Injects a right-click at a normalized position as a DOWN then UP pair, mirroring
-     * how a physical secondary click presses and releases. [x]/[y] are clamped to [0,1].
-     */
     suspend fun sendRightClick(x: Float, y: Float) {
         val cx = x.coerceIn(0f, 1f)
         val cy = y.coerceIn(0f, 1f)

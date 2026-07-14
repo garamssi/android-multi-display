@@ -84,30 +84,19 @@ fun DisplayScreen(
 ) {
     val context = LocalContext.current
 
-    // Floating controls handle: always visible, dimmed while idle, and draggable anywhere
-    // for the session. Position is NOT persisted — every launch it starts at the
-    // bottom-center and the user re-places it as they like. A fixed on-screen handle (not a
-    // multi-finger gesture) avoids clashing with the tablet's system gestures.
     var controlsExpanded by remember { mutableStateOf(false) }
 
-    // Single-finger long-press = right-click. Timing runs on the composition scope.
     val longPressDetector = remember { LongPressDetector() }
     val gestureScope = rememberCoroutineScope()
 
-    // The session rotation (set in Settings before connecting; constant for the session).
-    // isPortrait locks the tablet orientation to match the Mac-built geometry; isFlipped
-    // applies a lossless 180 turn on the tablet (view + touch inversion), never sent to Mac.
+    // isFlipped applies a lossless 180 turn on the tablet (view + touch inversion); it is never sent to the Mac.
     val rotation = remember { viewModel.displayRotation() }
     val flipped = rotation.isFlipped
 
-    // Local pinch-zoom of the mirror view (client-side; Mac not involved).
     val zoom = remember { ViewZoom() }
-    // The transformed SurfaceView, so the zoom transform can be applied to it directly.
     var surfaceView by remember { mutableStateOf<SurfaceView?>(null) }
 
-    // Single-finger press is debounced: on DOWN the cursor tracks (hover) but the press is
-    // withheld briefly; if a second finger lands first the press is cancelled — so two
-    // fingers NEVER emit a click. Committed after PRESS_DEBOUNCE_MS if still one finger.
+    // Single-finger press is debounced: withheld on DOWN, cancelled if a second finger lands, so two fingers never emit a click.
     var awaitingPress by remember { mutableStateOf(false) }
     var pressed by remember { mutableStateOf(false) }
     var longPressConsumed by remember { mutableStateOf(false) }
@@ -117,9 +106,6 @@ fun DisplayScreen(
     var lastNx by remember { mutableFloatStateOf(0f) }
     var lastNy by remember { mutableFloatStateOf(0f) }
 
-    // Two-finger pinch/pan tracking (screen px; the touch layer is untransformed). Each
-    // two-finger gesture locks into one intent (zoom OR scroll/pan) once it passes a slop,
-    // so the two never fight. `start*` anchor the lock decision; `prev*` give per-frame deltas.
     var twoFingerMode by remember { mutableStateOf(TwoFingerMode.Undecided) }
     var startDist by remember { mutableFloatStateOf(0f) }
     var startCx by remember { mutableFloatStateOf(0f) }
@@ -128,7 +114,6 @@ fun DisplayScreen(
     var prevCx by remember { mutableFloatStateOf(0f) }
     var prevCy by remember { mutableFloatStateOf(0f) }
 
-    // Inertial scroll (two-finger, only while not zoomed).
     val velocityTracker = remember { VelocityTracker2D() }
     val flingDecay = remember { FlingDecay() }
     var flingJob by remember { mutableStateOf<Job?>(null) }
@@ -156,8 +141,6 @@ fun DisplayScreen(
 
     DisposableEffect(Unit) {
         val activity = context as? Activity
-        // Lock the tablet to the geometry the Mac builds so the mirror fills the panel
-        // without letterboxing: portrait for 90/270, landscape otherwise. Restored on exit.
         val previousOrientation = activity?.requestedOrientation
         activity?.let {
             val windowInsetsController =
@@ -193,13 +176,7 @@ fun DisplayScreen(
 
     BackHandler { leaveToConnect() }
 
-    // Applies the current local zoom to the rendered SurfaceView (pivot top-left), folding
-    // in the optional 180 flip. Rather than rotating a parent view (SurfaceView's surface
-    // layer does not reliably follow a parent transform), the flip is composed into the
-    // same proven scale/translate path: a 180 turn about the view center is negative scale
-    // on both axes (scaleX = scaleY = -scale, NOT a single-axis mirror) with the pivot at
-    // top-left, so screen = -scale*content + (viewSize - offset). This is exactly the
-    // transform ViewZoom.contentNormalized* inverts when flipped, so taps stay accurate.
+    // 180 flip = negative scale on BOTH axes (not a single-axis mirror) with top-left pivot: screen = -scale*content + (viewSize - offset), which ViewZoom inverts when flipped so taps stay accurate.
     fun applyZoom() {
         surfaceView?.let {
             val w = it.width.toFloat()
@@ -218,8 +195,7 @@ fun DisplayScreen(
         }
     }
 
-    // Core gesture router. `viewW`/`viewH` are the untransformed touch layer size (px), so
-    // getX/getY are screen-space; touch coordinates are inverse-mapped through the zoom.
+    // viewW/viewH are the untransformed touch-layer size (px); getX/getY are screen-space, inverse-mapped through the zoom.
     fun handleTouch(event: MotionEvent, viewW: Int, viewH: Int) {
         val phase = event.toPointerPhase() ?: return
         val count = event.pointerCount
@@ -238,7 +214,6 @@ fun DisplayScreen(
                 val nx = zoom.contentNormalizedX(event.getX(0), w, flipped)
                 val ny = zoom.contentNormalizedY(event.getY(0), h, flipped)
                 lastNx = nx; lastNy = ny
-                // Position the cursor immediately (hover); withhold the press.
                 viewModel.sendPointerMove(nx, ny)
                 awaitingPress = true; pressed = false
 
@@ -257,8 +232,6 @@ fun DisplayScreen(
                     if (longPressDetector.fireIfElapsed(SystemClock.uptimeMillis())) {
                         val rx = zoom.contentNormalizedX(longPressDetector.anchorX, w, flipped)
                         val ry = zoom.contentNormalizedY(longPressDetector.anchorY, h, flipped)
-                        // The press has committed by now (debounce << long-press); release
-                        // it then right-click, in order.
                         viewModel.sendLongPressRightClick(rx, ry)
                         longPressConsumed = true
                         pressed = false
@@ -267,7 +240,6 @@ fun DisplayScreen(
             }
 
             PointerPhase.POINTER_DOWN -> {
-                // A second/third finger: this can never be a single-finger touch.
                 longPressJob?.cancel()
                 pressJob?.cancel()
                 if (awaitingPress) {
@@ -278,7 +250,6 @@ fun DisplayScreen(
                 }
                 gestureMulti = true
                 flingJob?.cancel(); flingJob = null
-                // Seed on the next two-finger MOVE (start positions), and decide the mode then.
                 prevPinchDist = 0f
                 twoFingerMode = TwoFingerMode.Undecided
                 if (count >= 3) scrolling = false
@@ -290,13 +261,10 @@ fun DisplayScreen(
                     val curCx = pointerCentroidX(event)
                     val curCy = pointerCentroidY(event)
                     if (prevPinchDist <= MIN_PINCH_DIST_PX) {
-                        // (Re)seed after two fingers land or a finger lifts/rejoins.
                         startDist = curDist; startCx = curCx; startCy = curCy
                         prevPinchDist = curDist; prevCx = curCx; prevCy = curCy
                         twoFingerMode = TwoFingerMode.Undecided
                     } else {
-                        // Lock the gesture to zoom OR scroll/pan once it passes the slop —
-                        // whichever moved more from the start (spread vs. translate).
                         if (twoFingerMode == TwoFingerMode.Undecided) {
                             val spread = abs(curDist - startDist)
                             val travel = hypot(curCx - startCx, curCy - startCy)
@@ -315,15 +283,12 @@ fun DisplayScreen(
                                 val dCx = curCx - prevCx
                                 val dCy = curCy - prevCy
                                 if (zoom.isZoomed) {
-                                    // Zoom transform is on the pre-flip surface, so under a
-                                    // 180 flip the screen delta must be negated to pan in
-                                    // the direction the finger moves.
+                                    // Zoom transform is pre-flip, so under a 180 flip the pan delta must be negated to follow the finger.
                                     val panX = if (flipped) -dCx else dCx
                                     val panY = if (flipped) -dCy else dCy
                                     zoom.pan(panX, panY, w, h) // pan the magnified view
                                     applyZoom()
                                 } else {
-                                    // Not zoomed: two-finger drag scrolls the Mac; track velocity for fling.
                                     val dxN = dCx / w
                                     val dyN = dCy / h
                                     viewModel.sendScroll(dxN, dyN)
@@ -345,14 +310,11 @@ fun DisplayScreen(
                     val nx = zoom.contentNormalizedX(event.getX(0), w, flipped)
                     val ny = zoom.contentNormalizedY(event.getY(0), h, flipped)
                     lastNx = nx; lastNy = ny
-                    // Hover (before commit) or drag (after) — the Mac classifies by down-state.
                     if (!longPressConsumed) viewModel.sendPointerMove(nx, ny)
                 }
             }
 
             PointerPhase.POINTER_UP -> {
-                // A finger lifted mid-gesture; re-seed the pinch trackers and re-decide the
-                // mode on the next MOVE (pointer indices shift). Keep suppressing single-finger.
                 longPressJob?.cancel()
                 prevPinchDist = 0f
                 twoFingerMode = TwoFingerMode.Undecided
@@ -365,14 +327,12 @@ fun DisplayScreen(
                     when {
                         pressed && !longPressConsumed -> viewModel.sendPointerUp(lastNx, lastNy)
                         awaitingPress && !longPressConsumed -> {
-                            // Quick tap before the debounce elapsed -> a click.
                             viewModel.sendPointerDown(lastNx, lastNy)
                             viewModel.sendPointerUp(lastNx, lastNy)
                         }
                     }
                 }
 
-                // Fling the Mac scroll if released while still moving (only when not zoomed).
                 val sinceLastScroll =
                     if (lastScrollTimeMs == 0L) Long.MAX_VALUE else event.eventTime - lastScrollTimeMs
                 if (scrolling && !zoom.isZoomed &&
@@ -417,8 +377,7 @@ fun DisplayScreen(
             factory = { ctx ->
                 val container = FrameLayout(ctx)
                 val surface = SurfaceView(ctx).apply {
-                    // Pivot at top-left so the zoom transform matches ViewZoom's math
-                    // (screen = content * scale + offset).
+                    // Pivot at top-left so the zoom transform matches ViewZoom's math (screen = content * scale + offset).
                     pivotX = 0f
                     pivotY = 0f
                     holder.addCallback(object : SurfaceHolder.Callback {
@@ -433,8 +392,6 @@ fun DisplayScreen(
                             height: Int,
                         ) {
                             viewModel.onSurfaceAvailable(holder.surface)
-                            // Apply the current transform now that the view is laid out, so
-                            // a 180 flip shows immediately even before any zoom gesture.
                             applyZoom()
                         }
 
@@ -450,8 +407,7 @@ fun DisplayScreen(
                         FrameLayout.LayoutParams.MATCH_PARENT,
                     ),
                 )
-                // Touches land on the (untransformed) container, so getX/getY are
-                // screen-space regardless of the SurfaceView's zoom/flip transforms.
+                // Touches land on the untransformed container, so getX/getY stay screen-space regardless of the SurfaceView's zoom/flip.
                 container.setOnTouchListener { v, event ->
                     handleTouch(event, v.width, v.height)
                     when (event.actionMasked) {
@@ -522,40 +478,24 @@ private fun ReconnectingOverlay(modifier: Modifier = Modifier) {
     }
 }
 
-/** Idle time before the always-visible controls handle dims. */
 private const val CONTROLS_IDLE_DIM_MS = 4_000L
 
-/** Opacity the controls handle fades to while idle (brightens on touch / when expanded).
- *  Kept high enough that the dark-glass handle stays clearly visible over bright or dark
- *  mirrored content — it dims to hint idleness, not to disappear. */
 private const val CONTROLS_DIM_ALPHA = 0.65f
 
-/** Diameter of the draggable controls handle (matches GlassCircleButton). */
 private val HANDLE_SIZE = 48.dp
 
-/** Where the handle starts on every launch (fraction 0..1 of the draggable area):
- *  bottom-center. The position is intentionally NOT persisted — the user drags it wherever
- *  they want for the session, and it returns here next time. Y < 1 keeps it just above the
- *  bottom gesture-nav area. */
 private const val HANDLE_INITIAL_FRACTION_X = 0.5f
 private const val HANDLE_INITIAL_FRACTION_Y = 0.9f
 
-/** Max gap between the last scroll movement and the finger lift for a fling to start. */
 private const val FLING_MAX_RELEASE_GAP_MS = 60L
 
-/** How long the first finger's press is withheld to see if a second finger joins (so a
- *  two-finger gesture never emits a click). Short enough to feel responsive. */
 private const val PRESS_DEBOUNCE_MS = 60L
 
-/** Guards against a divide-by-~zero when a two-finger gesture starts with the fingers
- *  almost coincident. */
+// Guards divide-by-~zero when a two-finger gesture starts with the fingers almost coincident.
 private const val MIN_PINCH_DIST_PX = 1f
 
-/** Movement (finger spread or centroid travel, px) before a two-finger gesture commits to
- *  zoom or scroll/pan. Keeps the two from firing together on incidental jitter. */
 private const val GESTURE_SLOP_PX = 24f
 
-/** A two-finger gesture is locked to one intent after it passes [GESTURE_SLOP_PX]. */
 private enum class TwoFingerMode { Undecided, Zoom, ScrollPan }
 
 private fun pointerDistance(event: MotionEvent): Float =
@@ -565,7 +505,6 @@ private fun pointerCentroidX(event: MotionEvent): Float = (event.getX(0) + event
 
 private fun pointerCentroidY(event: MotionEvent): Float = (event.getY(0) + event.getY(1)) / 2f
 
-/** Maps an Android MotionEvent to the detector's coarse phase (null = ignored). */
 private fun MotionEvent.toPointerPhase(): PointerPhase? = when (actionMasked) {
     MotionEvent.ACTION_DOWN -> PointerPhase.DOWN
     MotionEvent.ACTION_POINTER_DOWN -> PointerPhase.POINTER_DOWN
@@ -576,15 +515,8 @@ private fun MotionEvent.toPointerPhase(): PointerPhase? = when (actionMasked) {
     else -> null
 }
 
-/** Cubic-bezier(.4,0,.2,1) — the "standard" easing used throughout the handoff. */
 private val StandardEasing = CubicBezierEasing(0.4f, 0f, 0.2f, 1f)
 
-/**
- * Always-visible controls: a draggable handle that starts at [initialFractionX] /
- * [initialFractionY] each launch and can be dragged anywhere for the session, dimmed while
- * idle. The position is deliberately NOT persisted. Uses a fixed on-screen affordance (not
- * a multi-finger gesture) so it never clashes with the tablet's own system gestures.
- */
 @Composable
 private fun DraggableControls(
     expanded: Boolean,
@@ -597,14 +529,12 @@ private fun DraggableControls(
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val density = LocalDensity.current
         val handlePx = with(density) { HANDLE_SIZE.toPx() }
-        // Draggable range for the handle's top-left, keeping it fully on-screen.
         val rangeX = (constraints.maxWidth - handlePx).coerceAtLeast(1f)
         val rangeY = (constraints.maxHeight - handlePx).coerceAtLeast(1f)
 
         var hx by remember { mutableFloatStateOf((initialFractionX * rangeX).coerceIn(0f, rangeX)) }
         var hy by remember { mutableFloatStateOf((initialFractionY * rangeY).coerceIn(0f, rangeY)) }
 
-        // Dim while idle; brighten on interaction; stay bright while expanded.
         var interaction by remember { mutableIntStateOf(0) }
         var idle by remember { mutableStateOf(false) }
         LaunchedEffect(interaction, expanded) {
@@ -632,8 +562,6 @@ private fun DraggableControls(
                 onSettings = onSettings,
                 onDisconnect = onDisconnect,
                 handleModifier = Modifier.pointerInput(rangeX, rangeY) {
-                    // Drag updates the in-session position only; it is not saved, so the
-                    // handle returns to its initial spot on the next launch.
                     detectDragGestures(
                         onDragStart = { interaction++ },
                     ) { change, drag ->
@@ -680,11 +608,8 @@ private fun FloatingControl(
     val density = LocalDensity.current
     val handlePx = with(density) { HANDLE_SIZE.toPx() }
     val gapPx = with(density) { 12.dp.toPx() }
-    // Group = two 48dp buttons + a 12dp gap.
     val groupWidthPx = with(density) { (48.dp * 2 + 12.dp).toPx() }
 
-    // The handle is anchored at (0,0); the expandable group is drawn beside it (toward
-    // screen center) without shifting the handle, so dragging stays predictable.
     Box {
         if (expand > 0f) {
             Row(

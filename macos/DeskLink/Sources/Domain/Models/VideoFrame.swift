@@ -4,10 +4,8 @@ public struct VideoFrame: Sendable {
     public let data: Data
     public let timestampUs: Int64
     public let isKeyframe: Bool
-    /// Pixel dimensions of the captured frame (0 if unknown).
     public let width: Int
     public let height: Int
-    /// Bytes per row of `data` (source stride, may include padding; 0 if unknown).
     public let bytesPerRow: Int
 
     public init(

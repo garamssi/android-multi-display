@@ -9,9 +9,6 @@ import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
-/**
- * Golden-vector tests for VIDEO_CONFIG (0x11) and VIDEO_FRAME (0x10) parsing.
- */
 class VideoProtocolTest {
 
     private fun hexToBytes(hex: String): ByteArray =
@@ -19,7 +16,6 @@ class VideoProtocolTest {
 
     @Test
     fun `parse VIDEO_CONFIG golden vector`() {
-        // codec=0x01, cfgLen=0x0005, cfg=0000000140
         val payload = hexToBytes("01" + "0005" + "0000000140")
         val cfg = VideoProtocol.parseConfig(payload)!!
         assertEquals(DisplayConfig.Codec.HEVC, cfg.codec)
@@ -28,7 +24,6 @@ class VideoProtocolTest {
 
     @Test
     fun `parse VIDEO_CONFIG rejects overrun length`() {
-        // Declares 0x00FF config bytes but provides none.
         val payload = hexToBytes("01" + "00FF")
         assertNull(VideoProtocol.parseConfig(payload))
     }
@@ -41,7 +36,6 @@ class VideoProtocolTest {
 
     @Test
     fun `parse VIDEO_FRAME golden vector`() {
-        // ts=1000000us, flags=0x01 (keyframe), frameNo=42, nal=000000012600
         val payload = hexToBytes(
             "00000000000F4240" + // ts int64 BE
                 "01" +               // flags: keyframe
@@ -76,7 +70,6 @@ class VideoProtocolTest {
 
     @Test
     fun `parse VIDEO_FRAME allows empty NAL`() {
-        // Exactly the 13-byte header, no NAL bytes.
         val payload = hexToBytes("00000000000F4240" + "00" + "0000002A")
         val frame = VideoProtocol.parseFrame(payload)!!
         assertEquals(0, frame.nal.size)

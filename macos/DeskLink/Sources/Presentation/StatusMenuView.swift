@@ -1,20 +1,12 @@
 import SwiftUI
 import AppKit
 
-/// Menu-bar popover for the DeskLink server, rebuilt to the hi-fi handoff (spec §1).
-/// Renders reactively from `ServerViewModel.status` — a disconnected/connecting
-/// layout and a connected layout with live stats + uptime. All colors, sizes,
-/// gradients, radii and shadows come from `DesignTokens`.
 @MainActor
 struct StatusMenuView: View {
     let viewModel: ServerViewModel
 
-    /// Opens the dedicated Settings `Window` scene (see `DeskLinkApp`).
     @Environment(\.openWindow) private var openWindow
 
-    /// The pairing PIN is only actionable while the server is up, Wi-Fi (LAN) is on, and no
-    /// device has connected yet ("Waiting for device"). It is hidden when stopped and once
-    /// a device is connecting/connected.
     private var showPin: Bool {
         viewModel.status == .connecting && viewModel.wifiListening
     }
@@ -60,13 +52,9 @@ struct StatusMenuView: View {
             x: 0,
             y: DesignTokens.PanelShadow.y
         )
-        // Subtle indigo glow signalling the popover is "actionable" in the waiting state
-        // (approximates the design's `0 0 0 1px` accent ring; SwiftUI has no shadow spread).
         .shadow(color: showPin ? DesignTokens.pairingRingGlow : .clear, radius: showPin ? 10 : 0)
         .padding(8) // give the shadow / rounded corners room inside the menu window
         .task {
-            // Tick the pairing countdown / rotation while the popover is open. Self-gated in
-            // ServerViewModel to the waiting-over-Wi-Fi state; cancelled when the popover closes.
             while !Task.isCancelled {
                 viewModel.tickPairing()
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
@@ -92,9 +80,6 @@ struct StatusMenuView: View {
 
     // MARK: - Header
 
-    /// App version shown in the header, read from the bundle's CFBundleShortVersionString
-    /// (DeskLink-Info.plist) — the single source of truth — instead of a hardcoded literal
-    /// that drifts out of sync with the actual build.
     private var appVersionLabel: String {
         (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String)
             .map { "v\($0)" } ?? "—"
@@ -128,7 +113,6 @@ struct StatusMenuView: View {
             .fill(DesignTokens.appGlyphGradient)
             .frame(width: 32, height: 32)
             .overlay(
-                // inset 0 1px 0 rgba(255,255,255,.4) — a top highlight.
                 RoundedRectangle(cornerRadius: DesignTokens.Radius.glyph, style: .continuous)
                     .strokeBorder(Color.white.opacity(0.4), lineWidth: 1)
                     .mask(LinearGradient(colors: [.white, .clear], startPoint: .top, endPoint: .center))
@@ -246,8 +230,6 @@ struct StatusMenuView: View {
 
     // MARK: - Pairing PIN (waiting state)
 
-    /// Indigo-tinted card mirroring the Settings pairing PIN: mono digit cells, a Copy
-    /// button, and the auto-rotating countdown. Shown only while `showPin`.
     private var pinBlock: some View {
         VStack(alignment: .leading, spacing: 11) {
             HStack(spacing: 8) {
@@ -316,7 +298,6 @@ struct StatusMenuView: View {
         .buttonStyle(.plain)
     }
 
-    /// One-line note shown in the waiting state when Wi-Fi (LAN) is off — nothing to pair.
     private var usbOnlyNote: some View {
         HStack(spacing: 8) {
             Image(systemName: "cable.connector")
@@ -358,8 +339,6 @@ struct StatusMenuView: View {
     private var ghostRows: some View {
         VStack(spacing: 0) {
             Button {
-                // Open the Settings window and bring the (accessory) app forward so it
-                // isn't buried behind other windows.
                 openWindow(id: SettingsWindowID.value)
                 NSApp.activate()
             } label: {
@@ -421,7 +400,6 @@ private struct StatField: View {
 
 // MARK: - Status dots
 
-/// Amber "not connected"/"waiting" dot — pulses scale 1→1.3, opacity .45→1 (1.8s).
 private struct PulsingDot: View {
     let color: Color
 
@@ -440,7 +418,6 @@ private struct PulsingDot: View {
     }
 }
 
-/// Solid green "connected" dot with a soft glow.
 private struct GlowDot: View {
     let color: Color
 
@@ -454,14 +431,12 @@ private struct GlowDot: View {
 
 // MARK: - Button styles (hover-aware)
 
-/// Accent-gradient primary button (Start Server). Brightens on hover.
 private struct AccentButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         Content(configuration: configuration)
     }
 
-    // Named `Content`, not `Body`: a nested type named `Body` would collide with
-    // ButtonStyle's `Body` associated type and break protocol inference.
+    // Named `Content`, not `Body`: a nested `Body` collides with ButtonStyle's `Body` associated type and breaks protocol inference.
     private struct Content: View {
         let configuration: ButtonStyleConfiguration
         @State private var hovering = false
@@ -475,7 +450,6 @@ private struct AccentButtonStyle: ButtonStyle {
                     ZStack {
                         RoundedRectangle(cornerRadius: DesignTokens.Radius.primaryButton, style: .continuous)
                             .fill(DesignTokens.primaryButtonGradient)
-                        // inset 0 1px 0 rgba(255,255,255,.3) top highlight.
                         RoundedRectangle(cornerRadius: DesignTokens.Radius.primaryButton, style: .continuous)
                             .strokeBorder(Color.white.opacity(0.3), lineWidth: 1)
                             .mask(LinearGradient(colors: [.white, .clear], startPoint: .top, endPoint: .center))
@@ -495,7 +469,6 @@ private struct AccentButtonStyle: ButtonStyle {
     }
 }
 
-/// Red-tint destructive button (Stop Server).
 private struct StopButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         Content(configuration: configuration)
@@ -525,7 +498,6 @@ private struct StopButtonStyle: ButtonStyle {
     }
 }
 
-/// Transparent 38pt ghost row (Settings / Quit) with a leading icon and hover fill.
 private struct GhostRowButtonStyle: ButtonStyle {
     let baseTextColor: Color
     var hoverBg: Color = DesignTokens.surfaceHover
@@ -566,9 +538,6 @@ private struct GhostRowButtonStyle: ButtonStyle {
 
 // MARK: - Translucent blur backing
 
-/// `NSVisualEffectView` behind the panel to approximate `backdrop-filter: blur(30px)`.
-/// The gradient over it is ~95% opaque (per spec), so the blur reads as a subtle
-/// translucency rather than a full vibrancy.
 private struct VisualEffectBackground: NSViewRepresentable {
     func makeNSView(context: Context) -> NSVisualEffectView {
         let view = NSVisualEffectView()

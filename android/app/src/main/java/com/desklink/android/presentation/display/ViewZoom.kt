@@ -1,16 +1,6 @@
 package com.desklink.android.presentation.display
 
-/**
- * Local pinch-zoom + pan for the mirror view. Purely client-side: it scales/translates the
- * rendered mirror on the tablet (the Mac is not involved). All inputs are screen-space
- * pixels; the transform is clamped so the scaled content always covers the viewport.
- *
- * The mirror surface is transformed as `screen = content * scale + offset` (pivot at the
- * top-left), so [contentNormalizedX]/[contentNormalizedY] invert that to map a screen touch
- * back to the underlying Mac coordinate — keeping taps accurate while zoomed.
- *
- * Pure and Android-free so the math is unit-testable.
- */
+// Transform is screen = content * scale + offset with a top-left pivot; contentNormalized* inverts it to Mac coords.
 class ViewZoom(private val maxScale: Float = MAX_SCALE) {
 
     var scale: Float = 1f
@@ -20,7 +10,6 @@ class ViewZoom(private val maxScale: Float = MAX_SCALE) {
     var offsetY: Float = 0f
         private set
 
-    /** True once zoomed in past a tiny epsilon (so a two-finger drag pans instead of scrolls). */
     val isZoomed: Boolean get() = scale > 1f + EPSILON
 
     fun reset() {
@@ -29,10 +18,6 @@ class ViewZoom(private val maxScale: Float = MAX_SCALE) {
         offsetY = 0f
     }
 
-    /**
-     * Multiplies the scale by [ratio], keeping the screen focal point (fx, fy) fixed under
-     * the fingers. Clamps scale to [1, maxScale] and re-clamps the offset.
-     */
     fun pinch(ratio: Float, fx: Float, fy: Float, viewW: Float, viewH: Float) {
         if (viewW <= 0f || viewH <= 0f || !ratio.isFinite() || ratio <= 0f) return
         val newScale = (scale * ratio).coerceIn(1f, maxScale)
@@ -45,7 +30,6 @@ class ViewZoom(private val maxScale: Float = MAX_SCALE) {
         clamp(viewW, viewH)
     }
 
-    /** Pans by a screen-space delta, clamped so the content can't leave the viewport. */
     fun pan(dx: Float, dy: Float, viewW: Float, viewH: Float) {
         if (!isZoomed) return
         offsetX += dx
@@ -53,21 +37,13 @@ class ViewZoom(private val maxScale: Float = MAX_SCALE) {
         clamp(viewW, viewH)
     }
 
-    /**
-     * Normalized [0,1] content X for a screen X, inverting the current transform.
-     *
-     * When [flipped] the mirror is displayed 180-rotated (the outermost transform), so a
-     * native screen point maps to the opposite end: flip the screen coordinate first
-     * (viewW - screenX), then invert the zoom. This keeps taps accurate under a 180 turn.
-     */
+    // When flipped (180-rotated mirror), flip the screen coord (viewW - screenX) BEFORE inverting the zoom.
     fun contentNormalizedX(screenX: Float, viewW: Float, flipped: Boolean = false): Float {
         if (viewW <= 0f) return 0f
         val sx = if (flipped) viewW - screenX else screenX
         return ((sx - offsetX) / (scale * viewW)).coerceIn(0f, 1f)
     }
 
-    /** Normalized [0,1] content Y for a screen Y, inverting the current transform.
-     *  See [contentNormalizedX] for the [flipped] handling. */
     fun contentNormalizedY(screenY: Float, viewH: Float, flipped: Boolean = false): Float {
         if (viewH <= 0f) return 0f
         val sy = if (flipped) viewH - screenY else screenY

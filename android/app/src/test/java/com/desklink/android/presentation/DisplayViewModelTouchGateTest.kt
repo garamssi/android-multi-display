@@ -27,11 +27,6 @@ import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 
-/**
- * Verifies the Settings "Touch input" toggle actually gates every pointer/scroll
- * sender in [DisplayViewModel]: when off, nothing reaches [SendTouchUseCase]; when on,
- * the events are forwarded (the pre-existing behavior).
- */
 @OptIn(ExperimentalCoroutinesApi::class)
 class DisplayViewModelTouchGateTest {
 
@@ -50,8 +45,6 @@ class DisplayViewModelTouchGateTest {
         sendTouch: SendTouchUseCase,
     ): DisplayViewModel {
         val connection = mockk<ConnectionRepository>(relaxed = true)
-        // init { observeReconnectsToRestartVideo() } collects this; a steady Disconnected
-        // flow keeps the collector idle without triggering a video (re)start.
         every { connection.connectionState } returns
             MutableStateFlow<ConnectionState>(ConnectionState.Disconnected)
         return DisplayViewModel(
@@ -108,8 +101,7 @@ class DisplayViewModelTouchGateTest {
 
     @Test
     fun `a 180 flip negates the scroll delta`() {
-        // Default sensitivity 3.0, natural scroll (dir +1); a flipped rotation adds a -1,
-        // so a (1,1) delta is sent as (-3,-3).
+        // sensitivity 3.0 x natural(+1) x flip(-1): (1,1) -> (-3,-3).
         val settings = settings().apply { setDisplayRotation(DisplayRotation.ROTATION_180) }
         val sendTouch = mockk<SendTouchUseCase>(relaxed = true)
         val vm = viewModel(settings, sendTouch)

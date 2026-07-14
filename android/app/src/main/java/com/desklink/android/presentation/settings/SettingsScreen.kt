@@ -64,7 +64,6 @@ import com.desklink.android.presentation.components.StatusDot
 import com.desklink.android.presentation.theme.DeskLinkTokens
 import com.desklink.android.presentation.theme.PlexSans
 
-/** A resolution option shown as a radio card (dynamic list, derived from native). */
 private data class ResolutionOption(
     val name: String,
     val width: Int,
@@ -72,7 +71,6 @@ private data class ResolutionOption(
     val isNative: Boolean,
 )
 
-/** Friendly names for the standard presets. */
 private fun presetName(width: Int, height: Int): String = when {
     width >= 2560 -> "QHD"
     width >= 1920 -> "FHD+"
@@ -122,7 +120,6 @@ fun SettingsScreen(
             )
 
             BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-                // Responsive tiers: >=1024dp two columns; 600-1024 one column; <600 small.
                 val twoColumn = maxWidth >= 1024.dp
                 val small = maxWidth < 600.dp
                 val scroll = rememberScrollState()
@@ -137,7 +134,6 @@ fun SettingsScreen(
                         ),
                     verticalArrangement = Arrangement.spacedBy(30.dp),
                 ) {
-                    // Connection: compact inline segmented control.
                     Column {
                         SectionLabel("Connection")
                         Spacer(Modifier.height(12.dp))
@@ -221,7 +217,6 @@ fun SettingsScreen(
     }
 }
 
-/** Two-column on wide tablets, stacked otherwise. `left`/`right` receive the Modifier. */
 @Composable
 private fun AdaptiveTwoColumn(
     twoColumn: Boolean,
@@ -283,7 +278,6 @@ private fun SettingsHeader(onBack: () -> Unit, onReset: () -> Unit) {
     }
 }
 
-/** Compact, content-width USB / Wi-Fi segmented control (not a full-width bar). */
 @Composable
 private fun ConnectionSegmented(
     transportMode: TransportMode,
@@ -519,7 +513,6 @@ private fun StreamColumn(
     }
 }
 
-/** Wi-Fi mode left column: server address, discovered devices, and the TLS notice. */
 @Composable
 private fun WifiConnectionColumn(
     modifier: Modifier = Modifier,
@@ -549,11 +542,6 @@ private fun WifiConnectionColumn(
     }
 }
 
-/**
- * Discover Macs advertising over Bonjour and pick one (fills the address field). Handles
- * the NEARBY_WIFI_DEVICES runtime permission (Android 13+) and stops the scan — releasing
- * the multicast lock — when this leaves composition (mode switched away or screen closed).
- */
 @Composable
 private fun DiscoverySection(
     servers: List<DiscoveredServer>,
@@ -629,7 +617,6 @@ private fun DiscoveredServerRow(server: DiscoveredServer, onClick: () -> Unit) {
     }
 }
 
-/** Manual Mac IP / hostname entry for LAN mode, styled to match the chip cards. */
 @Composable
 private fun MacIpField(value: String, onValueChange: (String) -> Unit) {
     BasicTextField(
@@ -670,7 +657,6 @@ private fun MacIpField(value: String, onValueChange: (String) -> Unit) {
     )
 }
 
-/** Amber-tinted caution note (mirrors [InfoNote] styling with a warning color). */
 @Composable
 private fun WarningNote(text: String) {
     Row(
@@ -699,7 +685,6 @@ private fun WarningNote(text: String) {
     }
 }
 
-/** Single-line segment interior with a leading check when selected. */
 @Composable
 private fun SegmentLabel(text: String, isSelected: Boolean) {
     Row(
@@ -726,7 +711,6 @@ private fun SegmentLabel(text: String, isSelected: Boolean) {
 
 @Composable
 private fun SummaryChip(state: SettingsUiState) {
-    // In Wi-Fi mode the transport is TLS-encrypted; show that instead of the bitrate.
     val tail = if (state.transportMode == TransportMode.LAN) {
         "TLS"
     } else {

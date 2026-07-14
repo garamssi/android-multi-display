@@ -12,10 +12,6 @@ import org.junit.jupiter.api.Assertions.assertSame
 import org.junit.jupiter.api.Test
 import java.net.Socket
 
-/**
- * USB mode must stay plaintext: RoutingSecureChannel returns the socket unwrapped. (The
- * LAN/TLS branch does a real handshake and is verified on-device, not here.)
- */
 class RoutingSecureChannelTest {
 
     private fun settings(store: FakeSettingsStore) = SettingsRepository(

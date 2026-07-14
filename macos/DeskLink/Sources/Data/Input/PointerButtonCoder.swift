@@ -1,9 +1,5 @@
 import Foundation
 
-/// Deserializes POINTER_BUTTON (0x23) payloads per protocol spec:
-/// Button(1) + Action(1) + X(f32) + Y(f32) = 10 bytes, Big-Endian.
-/// Returns nil for an unknown button/action byte, a short payload, or an
-/// out-of-range coordinate (mirrors `TouchDeserializer`'s validation).
 public enum PointerButtonDeserializer {
 
     public static func deserialize(data: Data) -> PointerButtonEvent? {
@@ -25,9 +21,6 @@ public enum PointerButtonDeserializer {
     }
 }
 
-/// Mirror serializer for round-trip testing against the protocol golden vectors and
-/// to document the exact byte layout (the Mac only receives POINTER_BUTTON; Android
-/// sends it).
 public enum PointerButtonSerializer {
 
     public static func serialize(_ event: PointerButtonEvent) -> Data {

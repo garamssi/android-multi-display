@@ -7,8 +7,7 @@ import org.junit.jupiter.api.Test
 
 class ScrollSerializerTest {
 
-    /** Must match tools/protocol_vectors.py SCROLL(0.25, -0.5) = 3E800000BF000000 and
-     *  the Swift ScrollCoderTests golden vector. */
+    // Must match tools/protocol_vectors.py SCROLL(0.25, -0.5) golden vector.
     @Test
     fun `serialize matches golden vector`() {
         val bytes = ScrollSerializer.serialize(ScrollEvent(0.25f, -0.5f))

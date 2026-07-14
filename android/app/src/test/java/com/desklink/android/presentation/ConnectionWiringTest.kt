@@ -31,17 +31,11 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 
-/**
- * A-L4 wiring test: the connect flow reads the user-selected DisplayConfig from
- * SettingsRepository (mutated via the settings screen) and passes exactly that
- * config to ConnectToServerUseCase.connect.
- */
 @OptIn(ExperimentalCoroutinesApi::class)
 class ConnectionWiringTest {
 
     private val dispatcher = StandardTestDispatcher()
 
-    /** A SettingsRepository whose "native" screen size is fixed for deterministic tests. */
     private fun repo(nativeWidth: Int = 2560, nativeHeight: Int = 1600) =
         SettingsRepository(
             object : ScreenMetricsProvider {
@@ -50,12 +44,10 @@ class ConnectionWiringTest {
             FakeSettingsStore(),
         )
 
-    /** A UsbStateMonitor emitting a fixed connectivity value. */
     private fun usbMonitor(connected: Boolean = false) = object : UsbStateMonitor {
         override fun usbConnected(): Flow<Boolean> = flowOf(connected)
     }
 
-    /** A no-op PeerDiscovery (LAN discovery is not exercised by these USB-path tests). */
     private fun discovery() = object : PeerDiscovery {
         override fun servers(): Flow<List<DiscoveredServer>> = flowOf(emptyList())
     }
@@ -74,7 +66,6 @@ class ConnectionWiringTest {
     fun `default config is derived from the device native resolution`() {
         val repo = repo(nativeWidth = 2560, nativeHeight = 1600)
         val default = repo.current()
-        // Native 2560x1600 -> requested resolution defaults to native, 40 Mbps, HEVC.
         assertEquals(2560, default.width)
         assertEquals(1600, default.height)
         assertEquals(2560, default.nativeWidth)
@@ -97,7 +88,6 @@ class ConnectionWiringTest {
     fun `connect passes the user-selected settings config with native size preserved`() =
         runTest(dispatcher) {
             val repo = repo(nativeWidth = 2560, nativeHeight = 1600)
-            // User picks a smaller streaming resolution + explicit options in Settings.
             repo.setResolution(1280, 800)
             repo.setFps(120)
             repo.setBitrate(40_000)
@@ -118,7 +108,6 @@ class ConnectionWiringTest {
                 fps = 120,
                 codec = DisplayConfig.Codec.H264,
                 bitrateKbps = 40_000,
-                // Native size is preserved regardless of the chosen streaming resolution.
                 nativeWidth = 2560,
                 nativeHeight = 1600,
             )

@@ -1,13 +1,6 @@
 import Foundation
 
-/// Deserializes touch events from wire format per protocol spec.
-/// Format: Action(1) + X(4 float32) + Y(4 float32) + Pressure(2 uint16) + PointerID(1) + Timestamp(8 int64)
-/// Total: 20 bytes. All multibyte values are Big-Endian.
-///
-/// - Note: Multibyte values sit at non-8-byte-aligned offsets on the wire
-///   (e.g. the Int64 timestamp starts at offset 12). Reads therefore use
-///   `loadUnaligned(fromByteOffset:as:)`; `load(fromByteOffset:as:)` would be
-///   undefined behavior for misaligned access.
+// Wire fields sit at non-8-byte-aligned offsets; use loadUnaligned, not load (misaligned load is UB).
 public enum TouchDeserializer {
 
     public static func deserialize(data: Data) -> TouchEvent? {
@@ -45,8 +38,6 @@ public enum TouchDeserializer {
 
     // MARK: - Private
 
-    /// Parses a single 20-byte TOUCH_EVENT starting at `base` in the given raw buffer.
-    /// Uses `loadUnaligned` because the fields are not naturally aligned on the wire.
     private static func parseEvent(_ raw: UnsafeRawBufferPointer, at base: Int) -> TouchEvent? {
         guard base + TouchEvent.serializedSize <= raw.count else { return nil }
         var offset = base
@@ -85,13 +76,8 @@ public enum TouchDeserializer {
     }
 }
 
-/// Serializes touch events to the wire format. The Mac server only receives
-/// touch events (Android sends them), but this mirror of `TouchDeserializer`
-/// is used for round-trip testing against the protocol golden vectors and
-/// documents the exact byte layout.
 public enum TouchSerializer {
 
-    /// Serializes a single TOUCH_EVENT to its fixed 20-byte payload (Big-Endian).
     public static func serialize(_ event: TouchEvent) -> Data {
         var data = Data(capacity: TouchEvent.serializedSize)
 
@@ -105,7 +91,6 @@ public enum TouchSerializer {
         return data
     }
 
-    /// Serializes a TOUCH_BATCH payload: [Count uint16 BE][TOUCH_EVENT × Count].
     public static func serializeBatch(_ events: [TouchEvent]) -> Data {
         precondition(events.count <= 100, "TOUCH_BATCH max count is 100")
         var data = Data(capacity: 2 + events.count * TouchEvent.serializedSize)

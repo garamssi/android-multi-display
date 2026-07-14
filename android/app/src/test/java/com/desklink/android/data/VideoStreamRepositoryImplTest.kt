@@ -13,13 +13,7 @@ import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
-/**
- * Guards the resume-from-background behavior: while there is no output Surface (the
- * SurfaceView was destroyed when the app went to the background), the repository must
- * NOT drive the decoder's render/drain. Releasing output buffers to a destroyed
- * Surface can push MediaCodec into an error state, which showed up as a black screen
- * on resume.
- */
+// While backgrounded (no output Surface) the decoder must not render: releasing buffers to a destroyed Surface faults MediaCodec (black screen on resume).
 class VideoStreamRepositoryImplTest {
 
     private val transport = object : Transport {
@@ -34,7 +28,6 @@ class VideoStreamRepositoryImplTest {
         val decoder = mockk<HEVCDecoder>(relaxed = true)
         val repo = VideoStreamRepositoryImpl(mockk<TCPClient>(relaxed = true), decoder, transport)
 
-        // No surface has been supplied (background).
         assertFalse(repo.renderFrame())
         verify(exactly = 0) { decoder.renderFrame() }
     }

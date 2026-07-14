@@ -15,19 +15,6 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import javax.inject.Inject
 
-/**
- * A-H5: Video-channel repository.
- *
- * Connects a [TCPClient] to the transport-resolved video port, parses the initial
- * VIDEO_CONFIG (CodecID + uint16 length + Annex-B CSD) to configure the
- * [HEVCDecoder], then parses each VIDEO_FRAME (13-byte header -> PTS + keyframe
- * flag) and submits the NAL to the decoder. Emits [VideoStreamEvent]s describing
- * stream progress.
- *
- * The decoder needs a [Surface]; the presentation layer supplies it via
- * [setSurface] once the SurfaceView is ready. If a Surface arrives before the
- * config, configuration is deferred until both are present.
- */
 class VideoStreamRepositoryImpl @Inject constructor(
     private val videoClient: TCPClient,
     private val decoder: HEVCDecoder,
@@ -46,23 +33,12 @@ class VideoStreamRepositoryImpl @Inject constructor(
     @Volatile
     private var configured = false
 
-    /** Supplies the render Surface (from the SurfaceView). */
     override fun setSurface(surface: Surface?) {
-        // Just track the Surface: the render loop is gated on it (renderFrame) and the
-        // decoder is (re)configured against the current Surface when the stream
-        // (re)connects. Swapping a live codec's output Surface proved unreliable across
-        // a long background (the codec ends up released/invalid), so the presentation
-        // layer restarts the video stream on resume instead — which also gets a fresh
-        // VIDEO_CONFIG + keyframe from the Mac.
+        // Do not swap a live codec's output Surface: it is unreliable across a long background (the codec ends up released/invalid), so the stream is restarted on resume instead.
         this.surface = surface
     }
 
-    /**
-     * Drains + renders all decoded frames ready this vsync. While there is no output
-     * Surface (app backgrounded), skip it: releasing output buffers to a destroyed
-     * Surface can push the codec into an error state and cause a black screen on
-     * resume. Rendering resumes when [setSurface] supplies a live Surface again.
-     */
+    // Skip rendering while there is no Surface: releasing output buffers to a destroyed Surface can error the codec and black-screen the resume.
     override fun renderFrame(): Boolean {
         if (surface == null) return false
         return decoder.renderFrame()
@@ -108,7 +84,6 @@ class VideoStreamRepositoryImpl @Inject constructor(
 
                         MessageType.VIDEO_FRAME -> {
                             val frame = VideoProtocol.parseFrame(payload) ?: return@collect
-                            // Config may have arrived before the Surface; retry now.
                             if (!configured) tryConfigureDecoder()
                             if (frameCount < 3 || frameCount % 120 == 0) {
                                 Log.i(TAG, "VIDEO_FRAME #$frameCount nal=${frame.nal.size} key=${frame.isKeyframe} configured=$configured")
@@ -145,11 +120,9 @@ class VideoStreamRepositoryImpl @Inject constructor(
             }
 
             awaitClose {
-                // Collection cancelled: the socket/decoder are torn down by disconnect().
             }
         }
 
-    /** Configures the decoder if both a Surface and a codec config are available. */
     private suspend fun tryConfigureDecoder() {
         if (configured) return
         val s = surface
@@ -169,7 +142,6 @@ class VideoStreamRepositoryImpl @Inject constructor(
     }
 
     override suspend fun requestKeyframe() {
-        // KEYFRAME_REQUEST (0x12) has an empty payload.
         if (videoClient.isConnected) {
             videoClient.send(MessageType.KEYFRAME_REQUEST, ByteArray(0))
         }

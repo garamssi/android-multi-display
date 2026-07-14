@@ -2,11 +2,6 @@ import Foundation
 import Observation
 import AppKit
 
-/// Presentation model for the Settings window: surfaces the two macOS permission
-/// states and the diagnostic-logging toggle, and exposes intents to request/open them.
-///
-/// Platform calls go through `PermissionsManaging` (injected) so this is unit-testable
-/// with a fake; the view stays a pure renderer.
 @MainActor
 @Observable
 public final class SettingsViewModel {
@@ -14,19 +9,12 @@ public final class SettingsViewModel {
     public private(set) var accessibilityGranted = false
     public private(set) var screenRecordingGranted = false
 
-    /// The Mac's current non-loopback IPv4 addresses, shown so the user knows which
-    /// address to type into the tablet when Wi-Fi (LAN) is enabled. Refreshed alongside
-    /// the permission states.
     public private(set) var localNetworkAddresses: [String] = []
 
-    /// Transient status line for the diagnostics actions (nil = idle).
     public private(set) var diagnosticsStatus: String?
 
-    /// The recent DeskLink log text shown in the in-app viewer (empty until loaded).
     public private(set) var logText: String = ""
 
-    /// [logText] parsed into color-taggable lines. Computed once when logs load (not on
-    /// every render), keeping the log-format parsing out of the view.
     public private(set) var logLines: [DiagnosticLogLine] = []
 
     private let permissions: PermissionsManaging
@@ -37,25 +25,15 @@ public final class SettingsViewModel {
         refresh()
     }
 
-    /// The persisted "verbose diagnostic logging" flag. Computed over [Log.isVerbose]
-    /// so there's a single source of truth (no duplicated state to keep in sync).
     public var verboseLogging: Bool {
         get { Log.isVerbose }
         set { Log.isVerbose = newValue }
     }
 
-    /// The pairing PIN to show for LAN auth. Rotates on a wall-clock schedule while the
-    /// window shows it and no device is connected (see [tickPairing]).
     public private(set) var pairingPin: String = PairingPin.current
 
-    /// Whole seconds until [pairingPin] rotates, for the countdown under the digits.
     public private(set) var pairingSecondsRemaining: Int = PairingPin.secondsRemaining()
 
-    /// Advances the pairing PIN lifecycle one tick. Called ~1s while the Settings window
-    /// is open. Rotation is paused while a device is [connected] (the PIN isn't needed and
-    /// is hidden); when idle it rolls the PIN over once its lifetime elapses and refreshes
-    /// the countdown. The age is wall-clock (persisted birth time), so closing and
-    /// reopening the window resumes the same countdown rather than restarting it.
     public func tickPairing(connected: Bool) {
         guard !connected else { return }
         PairingPin.rotateIfExpired()
@@ -63,17 +41,10 @@ public final class SettingsViewModel {
         pairingSecondsRemaining = PairingPin.secondsRemaining()
     }
 
-    /// The "Allow Wi-Fi (LAN) connections" opt-in. Held as an observed stored property
-    /// (so toggling it re-renders the dependent detail UI immediately) and persisted to
-    /// [TransportSettings.wifiEnabled] on change. Read by the server at Start, so a
-    /// change takes effect the next time the server is started.
     public var wifiEnabled: Bool {
         didSet { TransportSettings.wifiEnabled = wifiEnabled }
     }
 
-    /// Re-reads both permission states and the local IPv4 addresses. Called on open and
-    /// periodically while the window is visible, so a change made in System Settings (or
-    /// a network change) shows up here.
     public func refresh() {
         accessibilityGranted = permissions.isAccessibilityGranted()
         screenRecordingGranted = permissions.isScreenRecordingGranted()
@@ -98,8 +69,6 @@ public final class SettingsViewModel {
         permissions.openScreenRecordingSettings()
     }
 
-    /// Loads the last 5 minutes of DeskLink unified-log lines into [logText] for the
-    /// in-app viewer. Runs off the main actor; result is applied back on the main actor.
     public func refreshLogs() {
         diagnosticsStatus = "Loading…"
         Task {
@@ -111,7 +80,6 @@ public final class SettingsViewModel {
         }
     }
 
-    /// Copies whatever is currently shown in the viewer to the clipboard.
     public func copyLogs() {
         guard !logText.isEmpty else {
             diagnosticsStatus = "Nothing to copy yet — tap Refresh"
@@ -126,7 +94,6 @@ public final class SettingsViewModel {
         NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/Utilities/Console.app"))
     }
 
-    /// Copies one of the Mac's addresses to the clipboard (the pairing block's copy icon).
     public func copyAddress(_ address: String) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(address, forType: .string)
@@ -134,7 +101,6 @@ public final class SettingsViewModel {
 
     // MARK: - Private
 
-    /// Runs `log show` for our subsystem off the main actor and returns the text.
     nonisolated private static func recentLogText() async -> String {
         await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {

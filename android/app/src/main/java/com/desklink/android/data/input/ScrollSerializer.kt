@@ -4,10 +4,6 @@ import com.desklink.android.domain.model.ScrollEvent
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
-/**
- * Serializes SCROLL to wire format per protocol spec:
- * DeltaX(4 float32) + DeltaY(4 float32) = 8 bytes, Big-Endian.
- */
 object ScrollSerializer {
 
     fun serialize(scroll: ScrollEvent): ByteArray {

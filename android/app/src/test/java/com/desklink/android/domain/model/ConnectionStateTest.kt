@@ -5,11 +5,6 @@ import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
-/**
- * Pins the single source of truth for connection-state classification. The screens
- * (Connection + Display) derive "busy/reconnecting" and "leave the mirror" from these
- * groupings, so their meaning must stay exactly here — not re-listed per screen.
- */
 class ConnectionStateTest {
 
     private val config = DisplayConfig()

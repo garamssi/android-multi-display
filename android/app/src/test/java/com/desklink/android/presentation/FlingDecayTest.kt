@@ -6,10 +6,6 @@ import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
-/**
- * The fling model must emit velocity*frameMs per step, apply the friction multiplier,
- * treat a speed below the floor as inactive, and always terminate.
- */
 class FlingDecayTest {
 
     @Test

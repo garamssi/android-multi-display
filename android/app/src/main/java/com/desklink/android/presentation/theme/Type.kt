@@ -6,10 +6,6 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import com.desklink.android.R
 
-/**
- * IBM Plex Sans — the primary UI typeface (weights 400/500/600/700). Static ttf
- * assets live in `res/font`.
- */
 val PlexSans = FontFamily(
     Font(R.font.ibm_plex_sans_regular, FontWeight.W400),
     Font(R.font.ibm_plex_sans_medium, FontWeight.W500),
@@ -17,21 +13,12 @@ val PlexSans = FontFamily(
     Font(R.font.ibm_plex_sans_bold, FontWeight.W700),
 )
 
-/**
- * IBM Plex Mono — the technical/values typeface (weights 400/500/600). Used for
- * resolutions, fps, bitrate, timers, status chips, error codes and section labels.
- */
 val PlexMono = FontFamily(
     Font(R.font.ibm_plex_mono_regular, FontWeight.W400),
     Font(R.font.ibm_plex_mono_medium, FontWeight.W500),
     Font(R.font.ibm_plex_mono_semibold, FontWeight.W600),
 )
 
-/**
- * Material3 typography, entirely re-based on IBM Plex Sans so any stock Material
- * component picks up the correct family. Screen-specific sizes are applied inline
- * (the handoff uses a bespoke type scale that doesn't map cleanly onto the M3 roles).
- */
 val DeskLinkTypography: Typography = Typography().run {
     copy(
         displayLarge = displayLarge.copy(fontFamily = PlexSans),

@@ -15,11 +15,6 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.desklink.android.presentation.theme.DeskLinkTokens
 
-/**
- * A small circular status indicator with an optional soft glow. When [pulsing] is set
- * it animates the amber "Not connected" pulse from the handoff (`dl-pulse`, 1.8s:
- * scale 1 → 1.3, opacity .45 → 1). The green connected/detected dot uses a static glow.
- */
 @Composable
 fun StatusDot(
     modifier: Modifier = Modifier,
@@ -55,7 +50,6 @@ fun StatusDot(
         alpha = 1f
     }
 
-    // Reserve room for the glow halo so it isn't clipped.
     Canvas(modifier = modifier.size(size * 2.4f)) {
         val center = androidx.compose.ui.geometry.Offset(this.size.width / 2f, this.size.height / 2f)
         val r = (size.toPx() / 2f) * scale

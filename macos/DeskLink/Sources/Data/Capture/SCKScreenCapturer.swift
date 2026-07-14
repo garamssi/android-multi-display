@@ -3,14 +3,6 @@ import ScreenCaptureKit
 import CoreMedia
 import CoreVideo
 
-/// Screen capturer built on ScreenCaptureKit (S-H2), replacing the deprecated
-/// `CGDisplayStream`-based `ScreenCapturer`.
-///
-/// It targets a specific `SCDisplay` (the DeskLink virtual display) via an
-/// `SCContentFilter`, configures an `SCStream`, and delivers each captured
-/// `CMSampleBuffer` as a raw-BGRA `VideoFrame` through the `ScreenCapturing`
-/// async stream. The `ScreenCapturing` protocol is unchanged so the use case is
-/// unaffected.
 public final class SCKScreenCapturer: NSObject, ScreenCapturing, @unchecked Sendable {
     private let lock = NSLock()
     private var stream: SCStream?
@@ -63,12 +55,7 @@ public final class SCKScreenCapturer: NSObject, ScreenCapturing, @unchecked Send
         fps: Int,
         continuation: AsyncThrowingStream<VideoFrame, Error>.Continuation
     ) async throws {
-        // Requires Screen Recording permission. `getShareableContent` throws
-        // (or returns no displays) if permission has not been granted; surface it
-        // as a capture failure so the caller can prompt the user.
-        //
-        // A freshly-created virtual display can take a moment to appear in
-        // SCShareableContent, so poll briefly for the target displayID.
+        // A freshly-created virtual display can take a moment to appear in SCShareableContent; poll briefly for the target displayID.
         Log.info(.capture, "capture: requested virtual displayID=\(displayID)")
         var display: SCDisplay?
         for attempt in 1...15 {
@@ -109,7 +96,6 @@ public final class SCKScreenCapturer: NSObject, ScreenCapturing, @unchecked Send
         configuration.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(max(1, fps)))
         configuration.queueDepth = 5
         configuration.showsCursor = true
-        // Deliver frames in display color space; scaling is handled by the encoder.
         configuration.scalesToFit = false
 
         let streamOutput = StreamOutput(continuation: continuation)
@@ -142,7 +128,6 @@ public final class SCKScreenCapturer: NSObject, ScreenCapturing, @unchecked Send
 
 // MARK: - Stream output
 
-/// Receives `CMSampleBuffer`s from `SCStream` and forwards raw BGRA frames.
 private final class StreamOutput: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sendable {
     private let continuation: AsyncThrowingStream<VideoFrame, Error>.Continuation
     private var frameCount = 0
@@ -156,7 +141,6 @@ private final class StreamOutput: NSObject, SCStreamOutput, SCStreamDelegate, @u
         guard type == .screen else { return }
         guard sampleBuffer.isValid else { return }
 
-        // Only forward complete frames; skip idle/blank status frames.
         guard let attachmentsArray = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false) as? [[SCStreamFrameInfo: Any]],
               let attachments = attachmentsArray.first,
               let statusRaw = attachments[.status] as? Int,
@@ -171,7 +155,6 @@ private final class StreamOutput: NSObject, SCStreamOutput, SCStreamDelegate, @u
 
         guard let imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
 
-        // Timestamp in microseconds from the sample's presentation time.
         let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
         let timestampUs = pts.isValid ? Int64(CMTimeGetSeconds(pts) * 1_000_000) : 0
 

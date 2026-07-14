@@ -11,11 +11,6 @@ import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import com.desklink.android.presentation.theme.PlexMono
 
-/**
- * IBM Plex Mono text — the project's canonical way to render technical values,
- * timers, resolutions, error codes and uppercase section labels. Wraps [Text] with
- * the mono family and CSS-parity `letter-spacing` (expressed in `em`).
- */
 @Composable
 fun MonoText(
     text: String,

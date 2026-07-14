@@ -1,10 +1,5 @@
 import Foundation
 
-/// One parsed line of the DeskLink unified log, split for color-tagged rendering in the
-/// diagnostics console: a short `timestamp` ("HH:MM:SS.mmm"), the emitting `category`
-/// (server / stream / capture / adb), and the human `message`. `timestamp` and `category`
-/// are nil for lines that don't match the log format (e.g. a `log show` preamble); those
-/// render as plain body text.
 public struct DiagnosticLogLine: Equatable, Identifiable {
     public let id: Int
     public let timestamp: String?
@@ -19,15 +14,8 @@ public struct DiagnosticLogLine: Equatable, Identifiable {
     }
 }
 
-/// Pure formatter turning the raw `log show --style compact` output for our subsystem into
-/// color-taggable lines. Kept free of SwiftUI so it is unit-testable; the view maps each
-/// `category` to a token color. It anchors only on the stable parts of the compact format
-/// — the leading timestamp and the `[subsystem:category]` tag — so the variable middle
-/// columns (thread, type, pid) don't affect parsing.
 enum DiagnosticLogParser {
 
-    /// Splits `text` into non-empty lines and parses each. Blank lines are dropped; input
-    /// order is preserved and each kept line gets a sequential, stable `id`.
     static func parse(_ text: String) -> [DiagnosticLogLine] {
         var result: [DiagnosticLogLine] = []
         for raw in text.split(separator: "\n", omittingEmptySubsequences: false) {
@@ -40,16 +28,11 @@ enum DiagnosticLogParser {
 
     // MARK: - Private
 
-    // These patterns are compile-time constants over a fixed format, so construction
-    // cannot fail; `try!` is the correct expression of "this literal is always valid"
-    // rather than a nil-dodging force-unwrap.
-    /// Leading `YYYY-MM-DD HH:MM:SS.ffffff` -> captures "HH:MM:SS.mmm" (ms cut to 3 digits).
+    // try! is correct: these are compile-time-constant regex patterns that are always valid, not a nil-dodging force-unwrap.
     private static let timestampRegex = try! NSRegularExpression(
         pattern: #"^\d{4}-\d{2}-\d{2} (\d{2}:\d{2}:\d{2}\.\d{3})"#
     )
 
-    /// `[<subsystem>:<category>]` -> captures the category word. Built from `Log.subsystem`
-    /// so it tracks the real subsystem instead of duplicating the literal.
     private static let categoryRegex = try! NSRegularExpression(
         pattern: "\\[" + NSRegularExpression.escapedPattern(for: Log.subsystem) + ":(\\w+)\\]"
     )
@@ -61,7 +44,6 @@ enum DiagnosticLogParser {
         guard let tagMatch = categoryRegex.firstMatch(in: line, options: [], range: full),
               let categoryRange = Range(tagMatch.range(at: 1), in: line),
               let tagRange = Range(tagMatch.range, in: line) else {
-            // No category tag: the whole trimmed line is the message.
             return DiagnosticLogLine(
                 id: id, timestamp: timestamp, category: nil,
                 message: line.trimmingCharacters(in: .whitespaces)

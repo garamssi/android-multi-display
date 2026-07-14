@@ -24,7 +24,6 @@ class KeepAliveControllerTest {
             send = { _, _ -> },
             onConnectionLost = {},
         )
-        // int64 BE ms: 1700000000000
         assertEquals("0000018BCFE56800", ka.timestampPayload(1_700_000_000_000L).toHex())
     }
 
@@ -39,7 +38,6 @@ class KeepAliveControllerTest {
         )
         ka.start()
 
-        // Advance 3 intervals, feeding a PONG after each so lastPong stays fresh.
         repeat(3) {
             advanceTimeBy(ProtocolConstants.PING_INTERVAL)
             runCurrent()
@@ -62,7 +60,6 @@ class KeepAliveControllerTest {
         )
         ka.start()
 
-        // No PONG ever. After PING_TIMEOUT elapses, the watchdog must fire.
         advanceTimeBy(ProtocolConstants.PING_TIMEOUT + ProtocolConstants.PING_INTERVAL)
         runCurrent()
 

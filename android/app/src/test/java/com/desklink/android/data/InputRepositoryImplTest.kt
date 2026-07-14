@@ -12,12 +12,7 @@ import io.mockk.mockk
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Test
 
-/**
- * A touch write can fail with "broken pipe" when the peer (Mac) went away mid-gesture
- * (stop / USB drop / reconnect) — `isConnected` only reflects the local socket. Touch
- * input is best-effort, so such an I/O failure must be dropped, NOT thrown: otherwise
- * it escapes the fire-and-forget coroutine that sent the touch and crashes the app.
- */
+// Touch is best-effort: a broken-pipe write must be dropped, not thrown, or it escapes the fire-and-forget send coroutine and crashes the app.
 class InputRepositoryImplTest {
 
     private val transport = object : Transport {
@@ -44,7 +39,6 @@ class InputRepositoryImplTest {
 
         val repo = InputRepositoryImpl(client, transport)
 
-        // Must complete normally (touch dropped), not propagate the SocketException.
         repo.sendTouchEvent(touch())
 
         coVerify { client.send(any(), any()) }

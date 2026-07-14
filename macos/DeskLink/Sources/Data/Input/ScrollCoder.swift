@@ -1,7 +1,5 @@
 import Foundation
 
-/// Deserializes SCROLL (0x22) payloads per protocol spec:
-/// DeltaX(f32) + DeltaY(f32) = 8 bytes, Big-Endian.
 public enum ScrollDeserializer {
 
     public static func deserialize(data: Data) -> ScrollEvent? {
@@ -14,8 +12,6 @@ public enum ScrollDeserializer {
     }
 }
 
-/// Mirror serializer for round-trip testing against the protocol golden vectors and
-/// to document the exact byte layout (the Mac only receives SCROLL; Android sends it).
 public enum ScrollSerializer {
 
     public static func serialize(_ scroll: ScrollEvent) -> Data {

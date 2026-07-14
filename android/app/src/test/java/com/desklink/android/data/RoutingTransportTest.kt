@@ -12,13 +12,6 @@ import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
 
-/**
- * The control/video/input channels dial whatever host [RoutingTransport] resolves from
- * the user-selected [TransportMode]: loopback for USB (unchanged), the manually entered
- * IP for LAN. A blank LAN host is surfaced as-is (the connect then fails) rather than
- * silently falling back to USB, so the user is never quietly connected to the wrong
- * target.
- */
 class RoutingTransportTest {
 
     private fun settings() = SettingsRepository(

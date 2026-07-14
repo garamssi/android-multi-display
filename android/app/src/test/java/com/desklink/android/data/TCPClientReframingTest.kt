@@ -14,14 +14,8 @@ import org.junit.jupiter.api.Test
 import java.io.ByteArrayInputStream
 import java.io.InputStream
 
-/**
- * A-C1 regression tests: TCPClient must reassemble multiple frames across partial
- * (tiny-chunk) reads and handle a single large frame — without O(n^2) recopying
- * and without frame loss.
- */
 class TCPClientReframingTest {
 
-    /** InputStream that hands out at most [chunk] bytes per read() call. */
     private class ChunkedInputStream(data: ByteArray, private val chunk: Int) : InputStream() {
         private val delegate = ByteArrayInputStream(data)
         override fun read(): Int = delegate.read()
@@ -49,8 +43,6 @@ class TCPClientReframingTest {
 
     @Test
     fun `reassembles a large frame split across many reads`() = runTest {
-        // ~512KB payload — larger than the internal read chunk, forcing buffer growth
-        // and confirming a single large frame is reassembled intact.
         val bigPayload = ByteArray(512 * 1024) { (it % 251).toByte() }
         val packet = PacketFramer.frame(MessageType.VIDEO_FRAME, bigPayload)
         val stream = ChunkedInputStream(packet, chunk = 7000)
@@ -88,7 +80,6 @@ class TCPClientReframingTest {
 
     @Test
     fun `framing error throws typed PacketFramingException`() = runTest {
-        // Length field of 0 is invalid (< 1) -> PacketFramer returns Error.
         val badHeader = byteArrayOf(0x00, 0x00, 0x00, 0x00, 0x07)
         val stream = ChunkedInputStream(badHeader, chunk = 5)
 

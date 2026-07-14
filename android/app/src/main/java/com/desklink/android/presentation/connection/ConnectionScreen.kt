@@ -86,10 +86,8 @@ import com.desklink.android.presentation.components.StatusDot
 import com.desklink.android.presentation.theme.DeskLinkTokens
 import com.desklink.android.presentation.theme.PlexSans
 
-/** A Wi-Fi pairing target: a discovered [server] (name + host), or a manual IP (server = null). */
 private data class PairingTarget(val name: String, val host: String, val server: DiscoveredServer?)
 
-/** Wrong-PIN attempts allowed before pairing is aborted and we return to discovery. */
 private const val PIN_ATTEMPT_BUDGET = 3
 
 @Composable
@@ -104,13 +102,10 @@ fun ConnectionScreen(
     val discoveredServers by viewModel.discoveredServers.collectAsStateWithLifecycle()
     val lastConnectedHost by viewModel.lastConnectedHost.collectAsStateWithLifecycle()
 
-    // Only navigate to Display in response to a Connect the user initiated here.
     var connectRequested by remember { mutableStateOf(false) }
 
     val context = LocalContext.current
 
-    // Wi-Fi pairing: the target being paired (a tapped server, or a manual IP), plus the
-    // PIN screen's phase and remaining attempts. All reset when the target changes.
     var pairingTarget by remember { mutableStateOf<PairingTarget?>(null) }
     var showEnterIp by remember { mutableStateOf(false) }
     var pairingPhase by remember(pairingTarget) { mutableStateOf(PairingPhase.Entering) }
@@ -125,10 +120,6 @@ fun ConnectionScreen(
         }
     }
 
-    // Drive the PIN screen from the connection result once the user has submitted a PIN.
-    // A wrong PIN spends an attempt and shows the retry state; running out aborts pairing
-    // and returns to the server list with a notice. Any other failure leaves pairing for
-    // the home error screen.
     LaunchedEffect(state, pairingTarget) {
         if (pairingTarget == null || !pairingSubmitted) return@LaunchedEffect
         val current = state
@@ -138,7 +129,6 @@ fun ConnectionScreen(
                     val left = pairingAttemptsLeft - 1
                     pairingAttemptsLeft = left
                     if (left <= 0) {
-                        // Too many wrong PINs: clear the error and drop back to discovery.
                         connectRequested = false
                         viewModel.disconnect()
                         pairingTarget = null
@@ -258,7 +248,6 @@ fun ConnectionScreen(
                 }
             }
 
-            // Top chrome (brand + mode pill + gear) on the home states only.
             if (!isBusy && !isError && pairingTargetNow == null) {
                 HomeChrome(
                     transportMode = transportMode,
@@ -282,7 +271,6 @@ fun ConnectionScreen(
     }
 }
 
-/** Top bar: brand mark + transport-mode pill (left), settings gear (right). */
 @Composable
 private fun HomeChrome(
     transportMode: TransportMode,
@@ -392,10 +380,6 @@ private fun StartContent(
     }
 }
 
-/**
- * Wi-Fi home: browse Macs advertised on the LAN and tap one to pair + connect. Handles
- * the NEARBY_WIFI_DEVICES permission (Android 13+); scans while shown, stops on leave.
- */
 @Composable
 private fun WifiDiscoveryContent(
     modifier: Modifier = Modifier,
@@ -517,7 +501,6 @@ private fun WifiDiscoveryContent(
     }
 }
 
-/** App glyph with two expanding radar rings (searching state). */
 @Composable
 private fun RadarHero() {
     val transition = rememberInfiniteTransition(label = "radar")
@@ -549,7 +532,6 @@ private fun RadarHero() {
     }
 }
 
-/** Shimmering placeholder card shown while scanning. */
 @Composable
 private fun ShimmerSkeletonCard() {
     val transition = rememberInfiniteTransition(label = "shimmer")
@@ -711,10 +693,6 @@ private fun RecentPill() {
     }
 }
 
-/**
- * Manual-IP entry: collects the Mac's address, then hands off to the PIN screen. The PIN
- * itself is entered on [PinEntryContent] (design 01c), keeping one pairing surface.
- */
 @Composable
 private fun EnterIpDialog(
     onContinue: (host: String) -> Unit,
@@ -967,7 +945,6 @@ private fun UsbChip(connected: Boolean, modifier: Modifier = Modifier) {
     }
 }
 
-/** Human label for the codec shown in the connecting subtitle. */
 private fun DisplayConfig.Codec.displayLabel(): String = when (this) {
     DisplayConfig.Codec.HEVC -> "H.265"
     DisplayConfig.Codec.H264 -> "H.264"

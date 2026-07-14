@@ -4,10 +4,6 @@ import com.desklink.android.domain.model.PointerButtonEvent
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
-/**
- * Serializes POINTER_BUTTON to wire format per protocol spec:
- * Button(1) + Action(1) + X(f32) + Y(f32) = 10 bytes, Big-Endian.
- */
 object PointerButtonSerializer {
 
     fun serialize(event: PointerButtonEvent): ByteArray {

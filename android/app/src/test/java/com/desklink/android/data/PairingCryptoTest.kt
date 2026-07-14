@@ -4,12 +4,7 @@ import com.desklink.android.data.security.PairingCrypto
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
 
-/**
- * Pins the PIN -> PSK derivation to the cross-platform golden vectors (RFC 5869
- * HKDF-SHA256). These exact hex values are produced by tools/pairing_vectors.py and
- * asserted identically by the macOS PairingCryptoTests, so a divergence on either
- * platform (which would break the TLS-PSK handshake) fails a unit test.
- */
+// Golden PIN->PSK vectors (RFC 5869 HKDF-SHA256) shared with tools/pairing_vectors.py and macOS PairingCryptoTests.
 class PairingCryptoTest {
 
     private fun ByteArray.hex(): String = joinToString("") { "%02x".format(it) }

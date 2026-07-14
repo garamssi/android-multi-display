@@ -15,7 +15,6 @@ class DisplayConfigTest {
             val out = config.oriented(rotation)
             assertEquals(2560, out.width)
             assertEquals(1600, out.height)
-            // Native size is untouched (always landscape-normalised for the handshake).
             assertEquals(2560, out.nativeWidth)
             assertEquals(1600, out.nativeHeight)
         }
@@ -35,8 +34,6 @@ class DisplayConfigTest {
 
     @Test
     fun `oriented is idempotent and normalises an already-portrait config`() {
-        // Even if width/height arrive tall, oriented() derives long/short so the result
-        // is deterministic for the rotation.
         val tall = DisplayConfig(width = 1600, height = 2560)
         assertEquals(2560, tall.oriented(DisplayRotation.ROTATION_0).width)
         assertEquals(1600, tall.oriented(DisplayRotation.ROTATION_0).height)

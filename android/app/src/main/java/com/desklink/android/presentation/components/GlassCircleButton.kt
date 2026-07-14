@@ -19,13 +19,6 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.desklink.android.presentation.theme.DeskLinkTokens
 
-/**
- * A 48dp circular "glass" overlay button used by the in-stream floating control.
- *
- * Compose can't reproduce CSS `backdrop-filter: blur()`, so the frosted look is
- * approximated with a near-opaque dark fill ([DeskLinkTokens.GlassFill]) plus a hairline
- * border and a soft drop shadow — visually equivalent over the mirrored desktop.
- */
 @Composable
 fun GlassCircleButton(
     icon: ImageVector,

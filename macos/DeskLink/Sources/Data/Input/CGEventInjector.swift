@@ -2,37 +2,16 @@ import Foundation
 import CoreGraphics
 import ApplicationServices
 
-/// Injects touch events as mouse events via the CGEvent API.
-/// Maps normalized coordinates (0-1) onto the target display's on-screen rectangle
-/// in the global coordinate space (points), via `CGDisplayBounds` (see `globalPoint`).
-///
-/// - S-M6: injection requires Accessibility (AXIsProcessTrusted) permission.
-///   `injectEvent` throws `inputPermissionDenied` (1301) when the process is not
-///   trusted, so the caller can surface a permission prompt.
-/// - S-M7: mouse-down state is tracked **per pointerId** rather than with a single
-///   shared `Bool`, so interleaved multi-pointer streams do not corrupt each
-///   other's down/drag state.
-///
-/// ## macOS single-pointer limitation
-/// macOS has no public multi-touch injection API; all pointers are mapped onto the
-/// **single system mouse cursor** and the left mouse button. True simultaneous
-/// multi-touch (e.g. pinch-zoom) therefore cannot be reproduced — concurrent
-/// pointers are serialized onto one cursor. Per-pointer down tracking still matters:
-/// it keeps each pointer's MOVE correctly classified as drag vs. hover and ensures a
-/// stray UP for one pointer doesn't cancel another pointer's drag. Practically,
-/// injection is driven by the primary (first-down) pointer.
+// macOS has no public multi-touch injection API; all pointers map onto the single system cursor. Per-pointer down tracking keeps each pointer's MOVE classified as drag vs hover.
 public final class CGEventInjector: InputReceiving, @unchecked Sendable {
     private let lock = NSLock()
 
-    /// Set of pointerIds currently in the "down" state. Empty means no button held.
     private var downPointers: Set<UInt8> = []
 
     public init() {}
 
     public func startReceiving(port: UInt16) -> AsyncThrowingStream<TouchEvent, Error> {
-        // Input receiving is handled by TCPServer + TouchDeserializer; the actual
-        // events are delivered via ReceiveInputUseCase. This stub returns an empty
-        // stream to satisfy the protocol.
+        // Stub: input arrives via TCPServer + TouchDeserializer; empty stream satisfies the protocol.
         AsyncThrowingStream<TouchEvent, Error>(bufferingPolicy: .bufferingNewest(60)) { _ in }
     }
 
@@ -42,31 +21,19 @@ public final class CGEventInjector: InputReceiving, @unchecked Sendable {
         }
     }
 
-    /// Returns true if the process is trusted to post input events (Accessibility).
     public static func isTrusted() -> Bool {
         AXIsProcessTrusted()
     }
 
-    /// Requests Accessibility permission, prompting the user if it is not yet granted.
-    /// Unlike `AXIsProcessTrusted()` (which only checks, silently), this ALSO registers
-    /// the app in System Settings > Privacy & Security > Accessibility so the user can
-    /// enable it — without this, injected mouse events are blocked and the app never
-    /// even appears in the list. Returns the current trust state.
+    // Prompting (unlike the silent AXIsProcessTrusted check) also registers the app in the Accessibility list; without it the app never appears there and input stays blocked.
     @discardableResult
     public static func requestAccessibility() -> Bool {
-        // Key is `kAXTrustedCheckOptionPrompt`; the string literal avoids CFString /
-        // Unmanaged bridging differences across SDKs. `true` shows the system prompt and
-        // lists the app when not yet trusted (no dialog if already trusted).
+        // String-literal key avoids CFString/Unmanaged bridging differences across SDKs (vs kAXTrustedCheckOptionPrompt).
         let options = ["AXTrustedCheckOptionPrompt": true] as CFDictionary
         return AXIsProcessTrustedWithOptions(options)
     }
 
-    /// Maps normalized [0,1] coordinates onto a point in the GLOBAL display coordinate
-    /// space, given the target display's bounds. CGEvent cursor positions are in
-    /// points, and `CGDisplayBounds` is the display's on-screen rectangle in points —
-    /// so we scale by the point size, NOT the pixel resolution. This is correct on
-    /// HiDPI/Retina (where points != pixels) and on multi-display layouts (the origin
-    /// offset places the point on the right screen). Input is clamped defensively.
+    // Scale by point size (CGDisplayBounds), NOT pixel resolution, so mapping is correct on HiDPI/Retina and multi-display layouts.
     static func globalPoint(normalizedX: Float, normalizedY: Float, displayBounds: CGRect) -> CGPoint {
         let clampedX = min(max(Double(normalizedX), 0), 1)
         let clampedY = min(max(Double(normalizedY), 0), 1)
@@ -77,13 +44,10 @@ public final class CGEventInjector: InputReceiving, @unchecked Sendable {
     }
 
     public func injectEvent(_ event: TouchEvent, displayID: UInt32) async throws {
-        // S-M6: require Accessibility permission before posting any event.
         guard AXIsProcessTrusted() else {
             throw ConnectionError.inputPermissionDenied
         }
 
-        // Map onto the display's on-screen rectangle (points). An empty rect means the
-        // display id is invalid / not ready — treat as an injection failure.
         let displayBounds = CGDisplayBounds(displayID)
         guard displayBounds.width > 0, displayBounds.height > 0 else {
             throw ConnectionError.inputInjectionFailed
@@ -106,22 +70,14 @@ public final class CGEventInjector: InputReceiving, @unchecked Sendable {
         }
     }
 
-    // Natural scrolling (content follows the fingers): a downward two-finger drag moves
-    // the content down. macOS posted scroll-wheel deltas use the opposite sign, hence
-    // -1. Flip a sign here if the on-device direction feels inverted.
+    // macOS posted scroll-wheel deltas use the opposite sign to natural scrolling, hence -1.
     private static let verticalScrollSign: Double = -1
     private static let horizontalScrollSign: Double = -1
 
-    /// Fractional scroll remainder carried between events. Pixel scroll deltas are
-    /// integers, so accumulating the sub-pixel part keeps slow scrolling smooth (no lost
-    /// motion / stair-stepping) instead of rounding each tiny delta to 0. Guarded by `lock`.
+    // Sub-pixel scroll remainder carried between events so slow scrolling isn't rounded to 0 (integer pixel deltas). Guarded by `lock`.
     private var scrollResidualVertical: Double = 0
     private var scrollResidualHorizontal: Double = 0
 
-    /// Scaled (unrounded) pixel scroll deltas for a normalized delta:
-    /// `sign * normalized * displayPointSize`. The tablet applies the user's scroll
-    /// sensitivity to the delta before sending, so the Mac injects 1:1. Pure for testing;
-    /// rounding and sub-pixel carry happen in `injectScroll`.
     static func scaledScrollPixels(deltaX: Float, deltaY: Float, displayBounds: CGRect) -> (vertical: Double, horizontal: Double) {
         let v = verticalScrollSign * Double(deltaY) * displayBounds.height
         let h = horizontalScrollSign * Double(deltaX) * displayBounds.width
@@ -147,7 +103,6 @@ public final class CGEventInjector: InputReceiving, @unchecked Sendable {
             deltaY: scroll.deltaY,
             displayBounds: displayBounds
         )
-        // Accumulate sub-pixel remainder, emit the integer part, keep the fraction.
         let (vertical, horizontal): (Int32, Int32) = lock.withLock {
             scrollResidualVertical += vScaled
             scrollResidualHorizontal += hScaled
@@ -157,7 +112,6 @@ public final class CGEventInjector: InputReceiving, @unchecked Sendable {
             scrollResidualHorizontal -= h
             return (Self.clampToInt32(v), Self.clampToInt32(h))
         }
-        // Nothing to scroll yet (accumulated delta still sub-pixel).
         guard vertical != 0 || horizontal != 0 else { return }
         guard let event = CGEvent(
             scrollWheelEvent2Source: nil,
@@ -197,7 +151,6 @@ public final class CGEventInjector: InputReceiving, @unchecked Sendable {
         cgEvent.post(tap: .cghidEventTap)
     }
 
-    /// Maps a protocol button + action onto the matching CGEvent mouse type and button.
     private static func mouseEvent(
         for button: PointerButtonEvent.Button,
         action: PointerButtonEvent.Action
@@ -231,7 +184,6 @@ public final class CGEventInjector: InputReceiving, @unchecked Sendable {
     }
 
     private func injectMouseMove(at point: CGPoint, pointerId: UInt8) throws {
-        // A MOVE is a drag if THIS pointer is currently down; otherwise a hover.
         let isDown = lock.withLock { downPointers.contains(pointerId) }
         let eventType: CGEventType = isDown ? .leftMouseDragged : .mouseMoved
 

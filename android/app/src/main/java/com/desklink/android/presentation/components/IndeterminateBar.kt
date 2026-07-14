@@ -21,12 +21,6 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.desklink.android.presentation.theme.DeskLinkTokens
 
-/**
- * The connecting-screen indeterminate progress bar (handoff `dl-indeterminate`, 1.3s).
- *
- * A 42%-wide accent-gradient fill sweeps across the track from `left:-42%` to
- * `left:100%` on a continuous ease loop, matching the spec keyframes.
- */
 @Composable
 fun IndeterminateBar(
     modifier: Modifier = Modifier,
@@ -44,7 +38,6 @@ fun IndeterminateBar(
     ) {
         val trackWidthPx = constraints.maxWidth.toFloat()
         val transition = rememberInfiniteTransition(label = "indeterminate")
-        // Fraction of the track width: -0.42 (fully off left) → 1.0 (fully off right).
         val progress by transition.animateFloat(
             initialValue = -fillFraction,
             targetValue = 1f,

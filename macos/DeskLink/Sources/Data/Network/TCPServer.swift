@@ -2,31 +2,14 @@ import Foundation
 import Network
 import Security
 
-/// TCP server for streaming data to (and receiving bytes from) an Android client.
-/// The listener binds either loopback only (USB via `adb reverse`) or all interfaces
-/// (additionally reachable over the local network), selected per `start(port:scope:)`.
-///
-/// The client-connection `AsyncStream` and the received-bytes `AsyncStream`, along
-/// with their continuations, are created **once** in `init` and stored, so every
-/// access returns the same live stream (S-H1). The previous computed-property
-/// pattern rebuilt the stream on each access and overwrote the continuation,
-/// dropping earlier subscribers.
-///
-/// The server is bidirectional: `send` writes framed packets, and a receive loop
-/// yields raw inbound bytes via `receivedBytes` (see `PacketReceiving`) for the
-/// control and input channels.
+// S-H1: the connection and received-bytes AsyncStreams + continuations are created once in init and stored; rebuilding per access overwrites the continuation and drops subscribers.
 public final class TCPServer: StreamServing, PacketReceiving, @unchecked Sendable {
     private var listener: NWListener?
     private var activeConnection: NWConnection?
     private let lock = NSLock()
 
-    /// Bonjour service type to advertise on this listener so tablets can discover the
-    /// Mac without a typed IP. Set only for the control channel in LAN mode (see
-    /// [advertiseBonjour]); nil (default) means no advertisement. Guarded by [lock].
     private var bonjourServiceType: String?
 
-    /// OS version advertised in the Bonjour TXT record (shown on the tablet's server
-    /// card), or nil to advertise no TXT. Guarded by [lock].
     private var bonjourOsVersion: String?
 
     private let connectionStream: AsyncStream<ClientConnection>
@@ -62,9 +45,6 @@ public final class TCPServer: StreamServing, PacketReceiving, @unchecked Sendabl
         bytesContinuation.finish()
     }
 
-    /// Configure Bonjour advertisement, applied on the next `start`. Only the control
-    /// channel advertises, and only in LAN mode; pass nil (or don't call) otherwise.
-    /// `osVersion` is published in the TXT record for the tablet's server card.
     public func advertiseBonjour(serviceType: String?, osVersion: String?) {
         lock.withLock {
             bonjourServiceType = serviceType
@@ -80,14 +60,9 @@ public final class TCPServer: StreamServing, PacketReceiving, @unchecked Sendabl
             let params: NWParameters
             switch scope {
             case .loopback:
-                // localhost only — reachable via the adb reverse tunnel (USB). Plaintext.
                 params = NWParameters(tls: nil, tcp: tcpOptions)
                 params.requiredInterfaceType = .loopback
             case .localNetwork:
-                // Bind all interfaces (loopback included, so USB still works) and serve
-                // TLS with the self-signed identity from scripts/create_tls_cert.sh. If
-                // the identity is missing, fall back to plaintext and log a hint rather
-                // than failing to bind.
                 if let identity = TlsIdentity.loadSecIdentity() {
                     let tls = NWProtocolTLS.Options()
                     sec_protocol_options_set_local_identity(tls.securityProtocolOptions, identity)
@@ -102,10 +77,7 @@ public final class TCPServer: StreamServing, PacketReceiving, @unchecked Sendabl
             let nwPort = NWEndpoint.Port(rawValue: port)!
             let newListener = try NWListener(using: params, on: nwPort)
 
-            // Advertise over Bonjour when configured (control channel, LAN mode). The
-            // advertised name defaults to the device name, which the tablet shows in its
-            // discovery list. Requires NSBonjourServices + NSLocalNetworkUsageDescription
-            // in Info.plist.
+            // Bonjour advertisement requires NSBonjourServices + NSLocalNetworkUsageDescription in Info.plist.
             if let serviceType = bonjourServiceType {
                 if let osVersion = bonjourOsVersion {
                     let txt = NWTXTRecord([ProtocolConstants.bonjourTxtKeyOS: osVersion])
@@ -142,9 +114,7 @@ public final class TCPServer: StreamServing, PacketReceiving, @unchecked Sendabl
             listener?.cancel()
             listener = nil
         }
-        // Note: the streams are intentionally NOT finished here so the server can
-        // be started again and continue delivering connections/bytes. They are
-        // finished only in deinit.
+        // Streams intentionally NOT finished here so the server can be restarted; they are finished only in deinit.
     }
 
     public func send(data: Data, type: MessageType) async throws {
@@ -170,11 +140,9 @@ public final class TCPServer: StreamServing, PacketReceiving, @unchecked Sendabl
 
     private func handleNewConnection(_ connection: NWConnection) {
         lock.withLock {
-            // Only allow one client at a time
             activeConnection?.cancel()
             activeConnection = connection
 
-            // Configure connection
             connection.stateUpdateHandler = { [weak self] state in
                 guard let self else { return }
                 switch state {
@@ -196,8 +164,6 @@ public final class TCPServer: StreamServing, PacketReceiving, @unchecked Sendabl
         }
     }
 
-    /// Continuously reads inbound bytes and yields them raw to `receivedBytes`.
-    /// Framing/parsing is done downstream by `FrameAccumulator`.
     private func startReceiveLoop(on connection: NWConnection) {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { [weak self] data, _, isComplete, error in
             guard let self else { return }
@@ -207,11 +173,9 @@ public final class TCPServer: StreamServing, PacketReceiving, @unchecked Sendabl
             }
 
             if isComplete || error != nil {
-                // Connection closed or errored; stop reading.
                 return
             }
 
-            // Keep reading only while this is still the active connection.
             let stillActive = self.lock.withLock { self.activeConnection === connection }
             if stillActive {
                 self.startReceiveLoop(on: connection)

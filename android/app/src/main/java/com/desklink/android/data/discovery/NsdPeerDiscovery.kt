@@ -22,25 +22,9 @@ import javax.inject.Singleton
 private const val TAG = "DeskLink"
 private const val MULTICAST_TAG = "desklink-nsd"
 
-/** Reads the advertised OS version from a resolved service's TXT record, if present. */
 private fun osOf(info: NsdServiceInfo): String? =
     info.attributes[ProtocolConstants.TXT_KEY_OS]?.let { String(it, Charsets.UTF_8) }
 
-/**
- * NsdManager-backed [PeerDiscovery]: browses for the Mac's advertised
- * [ProtocolConstants.SERVICE_TYPE] over Wi-Fi and resolves each to a host/port.
- *
- * Requires the NEARBY_WIFI_DEVICES runtime permission on Android 13+ (the caller
- * requests it before collecting); without it, discovery yields nothing. A multicast
- * lock is held while browsing so mDNS replies are received on devices that filter
- * multicast by default (needs CHANGE_WIFI_MULTICAST_STATE).
- *
- * Resolution uses the modern registerServiceInfoCallback on API 34+, falling back to
- * resolveService below 34 (the only resolve API on the minSdk 28 baseline, where it is
- * not yet deprecated).
- *
- * NOTE: mDNS behavior is device/OS-specific; this path needs on-device verification.
- */
 @Singleton
 class NsdPeerDiscovery @Inject constructor(
     @ApplicationContext private val context: Context,
@@ -111,13 +95,11 @@ class NsdPeerDiscovery @Inject constructor(
         }
     }
 
-    /** Resolves a found service to a host/port and updates the [registry]. */
     private interface ServiceResolver {
         fun resolve(info: NsdServiceInfo)
         fun cancelAll()
     }
 
-    /** API 34+: continuous updates, no single-resolve limitation. */
     @RequiresApi(Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
     private class CallbackResolver(
         private val nsd: NsdManager,
@@ -156,7 +138,6 @@ class NsdPeerDiscovery @Inject constructor(
         }
     }
 
-    /** Below API 34: resolveService is the only resolve API (not yet deprecated there). */
     private class LegacyResolver(
         private val nsd: NsdManager,
         private val registry: DiscoveredServerRegistry,
@@ -185,7 +166,6 @@ class NsdPeerDiscovery @Inject constructor(
         }
 
         override fun cancelAll() {
-            // Legacy resolves are fire-and-forget; nothing to unregister.
         }
     }
 }

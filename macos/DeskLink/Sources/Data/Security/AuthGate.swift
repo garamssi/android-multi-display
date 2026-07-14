@@ -1,20 +1,10 @@
 import Foundation
 
-/// Server-side LAN pairing authentication state for a control-channel session.
-///
-/// Actor-isolated because two concurrent tasks touch it: the keep-alive loop issues the
-/// challenge when a client connects, and the receive loop verifies the client's response.
-///
-/// `key == nil` means authentication is not required (USB / loopback, trusted by the
-/// physical link) — the gate reports authenticated immediately and issues no challenge.
 actor AuthGate {
 
-    /// Source of the current pairing key, read afresh at each [beginChallenge] so a
-    /// rotating key (the displayed PIN changes over time) is honored per connection.
-    /// Returning nil means auth is not required (USB / loopback).
+    // Read afresh per beginChallenge so a rotating PIN is honored; nil means auth not required.
     private let keyProvider: @Sendable () -> Data?
-    /// The key snapshotted when the current client's challenge was issued, so a rotation
-    /// between challenge and response can't invalidate an in-flight exchange.
+    // Snapshot of the key at challenge time so a rotation mid-exchange can't invalidate an in-flight auth.
     private var sessionKey: Data?
     private var serverNonce: Data?
     private var authenticated: Bool
@@ -25,8 +15,6 @@ actor AuthGate {
         self.authenticated = (keyProvider() == nil)
     }
 
-    /// Fixed-key initializer for a constant key (USB's nil, or tests). Kept as its own
-    /// designated init so it doesn't depend on actor init-delegation rules.
     init(key: Data?) {
         self.keyProvider = { key }
         self.authenticated = (key == nil)
@@ -34,9 +22,6 @@ actor AuthGate {
 
     var isAuthenticated: Bool { authenticated }
 
-    /// A fresh AUTH_CHALLENGE payload (server nonce) for a connecting client, or nil if
-    /// auth isn't required or the failure lockout is in effect. Snapshots the current key
-    /// and resets per-client state.
     func beginChallenge() -> Data? {
         guard let key = keyProvider(), failures < Self.maxFailures else { return nil }
         sessionKey = key
@@ -46,9 +31,6 @@ actor AuthGate {
         return nonce
     }
 
-    /// Verifies an AUTH_RESPONSE (clientNonce || clientProof). On success marks the
-    /// session authenticated and returns the AUTH_CONFIRM payload (server proof); on
-    /// failure returns nil and counts toward the lockout.
     func verifyResponse(_ payload: Data) -> Data? {
         guard let key = sessionKey, let serverNonce,
               payload.count == ProtocolConstants.authNonceLength + Self.proofLength else {

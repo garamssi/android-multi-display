@@ -12,13 +12,6 @@ import javax.net.ssl.X509TrustManager
 
 private const val TAG = "DeskLink"
 
-/**
- * LAN [SecureChannel]: layers TLS over the already-connected socket. The Mac serves a
- * self-signed certificate; we pin it trust-on-first-use ([CertPinStore]) since a public
- * CA can't vouch for a self-signed LAN cert. Hostname is intentionally not validated —
- * identity comes from the pin plus (next step) the PIN pairing. The handshake runs on
- * the caller's IO dispatcher.
- */
 @Singleton
 class TlsSecureChannel @Inject constructor(
     private val pinStore: CertPinStore,
@@ -31,7 +24,7 @@ class TlsSecureChannel @Inject constructor(
         val sslSocket = context.socketFactory
             .createSocket(socket, host, port, /* autoClose = */ true) as SSLSocket
         sslSocket.useClientMode = true
-        // TLS 1.2/1.3 only (1.3 is available from API 29; on API 28 this yields 1.2).
+        // TLS 1.2/1.3 only; 1.3 needs API 29, so API 28 gets 1.2.
         sslSocket.enabledProtocols = sslSocket.supportedProtocols
             .filter { it == "TLSv1.3" || it == "TLSv1.2" }
             .toTypedArray()
@@ -40,11 +33,7 @@ class TlsSecureChannel @Inject constructor(
     }
 }
 
-/**
- * Trust-on-first-use certificate pinning: on first connect to a host, trust and remember
- * the leaf certificate's fingerprint; thereafter require the same one. Hostname is not
- * checked (self-signed cert); the pin + PIN pairing provide identity.
- */
+// TOFU cert pinning over a self-signed cert: hostname is intentionally not checked; identity comes from the pin plus PIN pairing.
 private class PinningTrustManager(
     private val pinStore: CertPinStore,
     private val host: String,

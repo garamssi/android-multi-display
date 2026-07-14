@@ -6,11 +6,6 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
 
-/**
- * [SettingsStore] backed by a private [SharedPreferences] file. SharedPreferences gives
- * synchronous reads (needed so the repository can seed its state at construction without
- * a load race) and is not deprecated; writes use `apply()` (async, off the caller thread).
- */
 @Singleton
 class SharedPreferencesSettingsStore @Inject constructor(
     @ApplicationContext context: Context,

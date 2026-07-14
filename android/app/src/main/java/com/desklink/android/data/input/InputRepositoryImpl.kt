@@ -11,11 +11,6 @@ import com.desklink.android.domain.transport.Transport
 import java.io.IOException
 import javax.inject.Inject
 
-/**
- * A-H4: Input-channel repository. Connects a [TCPClient] to the transport-resolved
- * input port and sends serialized TOUCH_EVENT (0x20) / TOUCH_BATCH (0x21) messages
- * back to the Mac server.
- */
 class InputRepositoryImpl @Inject constructor(
     private val inputClient: TCPClient,
     private val transport: Transport,
@@ -46,19 +41,7 @@ class InputRepositoryImpl @Inject constructor(
         inputClient.disconnect()
     }
 
-    /**
-     * Touch input is best-effort. `isConnected` only reflects the LOCAL socket, so a
-     * write can still fail with "broken pipe" (or the socket can be closed by teardown
-     * between the check and the write) when the peer went away mid-gesture — during a
-     * Mac stop, USB drop, or reconnect. That is expected, not fatal: drop the touch.
-     * The control-channel keep-alive detects the real drop and drives reconnect.
-     *
-     * Without swallowing these I/O failures here, the exception escapes the
-     * fire-and-forget `viewModelScope.launch` that sent the touch and crashes the app
-     * (uncaught coroutine exception). This is a deliberate best-effort boundary, not a
-     * blanket catch: only I/O/closed-socket failures are dropped, and control-channel
-     * sends still surface their failures to trigger reconnect.
-     */
+    // Touch input is best-effort: dropping I/O/closed-socket failures here is deliberate, else the exception escapes the fire-and-forget send and crashes the app. Control-channel keep-alive drives reconnect.
     private suspend fun sendBestEffort(type: Byte, payload: () -> ByteArray) {
         if (!inputClient.isConnected) return
         try {
@@ -66,8 +49,7 @@ class InputRepositoryImpl @Inject constructor(
         } catch (e: IOException) {
             Log.i(TAG, "input send dropped (link down): ${e.message}")
         } catch (e: IllegalStateException) {
-            // TCPClient.send throws this if the stream was nulled by a concurrent
-            // disconnect() between the isConnected check and the write.
+            // TCPClient.send throws this if a concurrent disconnect() nulled the stream after the isConnected check.
             Log.i(TAG, "input send dropped (socket closed): ${e.message}")
         }
     }

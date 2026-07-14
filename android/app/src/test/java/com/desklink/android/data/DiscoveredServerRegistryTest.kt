@@ -5,11 +5,6 @@ import com.desklink.android.domain.transport.DiscoveredServer
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
 
-/**
- * The registry is the pure merge/dedup/order logic behind NsdManager discovery: a
- * re-resolve of the same service updates in place (keyed by name), removals drop it,
- * and the snapshot is name-sorted for a stable UI list.
- */
 class DiscoveredServerRegistryTest {
 
     private fun server(name: String, host: String, port: Int = 7100) =

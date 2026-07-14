@@ -8,10 +8,6 @@ import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
 
-/**
- * A right-click is delivered as a DOWN then UP pair on the RIGHT button, mirroring a
- * physical secondary click, with coordinates clamped to the normalized [0,1] range.
- */
 class SendTouchUseCaseTest {
 
     private class RecordingInputRepository : InputRepository {
