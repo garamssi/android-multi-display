@@ -46,7 +46,7 @@ enum DesignTokens {
 
     // Surfaces & borders (white-tinted overlays).
     static let surfaceCard = Color.white.opacity(0.04)      // stats card bg
-    static let surfaceChip = Color.white.opacity(0.05)      // "USB · idle" chip
+    static let surfaceChip = Color.white.opacity(0.05)      // status meta chip bg
     static let surfaceHover = Color.white.opacity(0.06)     // ghost-row hover
     static let borderSubtle = Color.white.opacity(0.07)     // dividers, card border
     static let borderStrong = Color.white.opacity(0.10)     // popover border
@@ -60,6 +60,16 @@ enum DesignTokens {
     // Pill / dot tints.
     static let livePillBg = Color(hex: 0x35D0A5, alpha: 0.12)
     static let livePillBorder = Color(hex: 0x35D0A5, alpha: 0.25)
+
+    // Pairing PIN block on the popover (section 05). Indigo-tinted card + digit cells.
+    static let pairingCardBorder = accentLight.opacity(0.24)
+    static let pairingRingBorder = accentLight.opacity(0.28)   // "actionable" panel border
+    static let pairingRingGlow = accentLight.opacity(0.22)     // soft indigo glow (ring approx.)
+    static let pinCellBorder = accentLight.opacity(0.34)
+    static let pairingLabel = Color(hex: 0x8F97B5)             // "PAIRING PIN" mono label
+    static let pairingCopyText = Color(hex: 0xAAB4FF)          // Copy button text/icon
+    static let copyButtonBg = Color.white.opacity(0.04)
+    static let copyButtonBorder = Color.white.opacity(0.12)
 
     // MARK: - Gradients
 
@@ -91,6 +101,20 @@ enum DesignTokens {
         endPoint: .bottom
     )
 
+    /// Pairing PIN card — `linear-gradient(180deg, rgba(124,134,255,.1), rgba(124,134,255,.03))`.
+    static let pairingCardGradient = LinearGradient(
+        colors: [accentLight.opacity(0.10), accentLight.opacity(0.03)],
+        startPoint: .top,
+        endPoint: .bottom
+    )
+
+    /// PIN digit cell — `linear-gradient(180deg, rgba(124,134,255,.2), rgba(124,134,255,.08))`.
+    static let pinCellGradient = LinearGradient(
+        colors: [accentLight.opacity(0.20), accentLight.opacity(0.08)],
+        startPoint: .top,
+        endPoint: .bottom
+    )
+
     // MARK: - Radii
 
     enum Radius {
@@ -100,6 +124,8 @@ enum DesignTokens {
         static let ghostRow: CGFloat = 10
         static let statsCard: CGFloat = 12
         static let card: CGFloat = 13       // status banner, pairing block
+        static let pairingCard: CGFloat = 14 // popover pairing-PIN card
+        static let pinCell: CGFloat = 10    // popover PIN digit cell
         static let small: CGFloat = 8       // PIN digit chip, console toolbar button
         static let chip: CGFloat = 6
     }

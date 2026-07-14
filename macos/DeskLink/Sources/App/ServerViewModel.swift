@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import AppKit
 
 /// High-level server state surfaced to the menu-bar UI.
 public enum ServerStatus: Sendable, Equatable {
@@ -37,6 +38,13 @@ public final class ServerViewModel {
     /// scope from — so the UI reflects the live listener, not a later toggle change that
     /// only takes effect on the next start.
     public private(set) var wifiListening = false
+
+    /// Pairing PIN mirrored on the popover while waiting to pair over Wi-Fi. Same source as
+    /// Settings (`PairingPin`); rotates on a wall-clock schedule via [tickPairing].
+    public private(set) var pairingPin: String = PairingPin.current
+
+    /// Whole seconds until [pairingPin] rotates, for the popover countdown.
+    public private(set) var pairingSecondsRemaining: Int = PairingPin.secondsRemaining()
 
     /// Negotiated output resolution, e.g. "2560×1600". `nil` when idle.
     public private(set) var output: String?
@@ -109,6 +117,23 @@ public final class ServerViewModel {
         Task { [weak self] in
             await self?.coordinator.stop()
         }
+    }
+
+    /// Advances the pairing PIN one tick. Called ~1s while the popover is open. The PIN is
+    /// only shown (and rotated) in the waiting-for-device state over Wi-Fi; other states
+    /// hide it. The age is wall-clock (persisted birth time), matching Settings, so the two
+    /// surfaces agree and closing/reopening the popover resumes the same countdown.
+    public func tickPairing() {
+        guard status == .connecting, wifiListening else { return }
+        PairingPin.rotateIfExpired()
+        pairingPin = PairingPin.current
+        pairingSecondsRemaining = PairingPin.secondsRemaining()
+    }
+
+    /// Copies the pairing PIN to the clipboard (popover Copy button).
+    public func copyPairingPin() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(pairingPin, forType: .string)
     }
 
     // MARK: - State transitions
