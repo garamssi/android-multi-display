@@ -11,7 +11,7 @@ import kotlin.math.hypot
  * beyond [moveSlopPx], or by the finger lifting. Timing is external: the caller
  * schedules a check [longPressThresholdMs] after DOWN and calls [fireIfElapsed].
  * Keeping the clock out of this class leaves the arming/disqualification logic pure
- * and unit-testable (matching [ControlTapDetector]).
+ * and unit-testable.
  *
  * The single-finger DOWN is forwarded to the Mac immediately as a left press for
  * responsive dragging, so when a long-press fires the caller must first release that

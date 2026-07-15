@@ -171,6 +171,17 @@ class SettingsRepository @Inject constructor(
 
     fun currentLastConnectedHost(): String = _lastConnectedHost.value
 
+    /** Persisted position of the floating controls handle, as a fraction (0..1) of the
+     *  draggable area, so it survives restarts and adapts across screen sizes/orientation. */
+    fun currentControlHandleX(): Float = store.getFloat(KEY_CTRL_HANDLE_X, DEFAULT_CTRL_HANDLE_X)
+
+    fun currentControlHandleY(): Float = store.getFloat(KEY_CTRL_HANDLE_Y, DEFAULT_CTRL_HANDLE_Y)
+
+    fun setControlHandlePosition(x: Float, y: Float) {
+        store.putFloat(KEY_CTRL_HANDLE_X, x.coerceIn(0f, 1f))
+        store.putFloat(KEY_CTRL_HANDLE_Y, y.coerceIn(0f, 1f))
+    }
+
     // --- Seeding from the store ---
 
     private fun loadConfig(): DisplayConfig = nativeConfig.copy(
@@ -196,6 +207,10 @@ class SettingsRepository @Inject constructor(
         /** USB is the default and only secure transport today; LAN is opt-in. */
         val DEFAULT_TRANSPORT_MODE = TransportMode.USB
 
+        /** Default controls-handle position: horizontally centered, near the top. */
+        const val DEFAULT_CTRL_HANDLE_X = 0.5f
+        const val DEFAULT_CTRL_HANDLE_Y = 0.04f
+
         private const val KEY_WIDTH = "width"
         private const val KEY_HEIGHT = "height"
         private const val KEY_FPS = "fps"
@@ -207,5 +222,7 @@ class SettingsRepository @Inject constructor(
         private const val KEY_MANUAL_HOST = "manualHost"
         private const val KEY_PAIRING_PIN = "pairingPin"
         private const val KEY_LAST_HOST = "lastConnectedHost"
+        private const val KEY_CTRL_HANDLE_X = "controlHandleX"
+        private const val KEY_CTRL_HANDLE_Y = "controlHandleY"
     }
 }

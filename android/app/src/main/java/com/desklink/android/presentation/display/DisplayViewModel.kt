@@ -168,6 +168,15 @@ class DisplayViewModel @Inject constructor(
         }
     }
 
+    /** Saved floating-controls-handle position (fraction 0..1 of the draggable area). */
+    fun controlHandleFractionX(): Float = settingsRepository.currentControlHandleX()
+
+    fun controlHandleFractionY(): Float = settingsRepository.currentControlHandleY()
+
+    /** Persists the handle position so it reappears in the same spot next launch. */
+    fun saveControlHandleFraction(x: Float, y: Float) =
+        settingsRepository.setControlHandlePosition(x, y)
+
     /** Presses the primary pointer down at a normalized position (mouse-down on the Mac). */
     fun sendPointerDown(x: Float, y: Float) = sendPrimary(TouchEvent.Action.DOWN, x, y)
 

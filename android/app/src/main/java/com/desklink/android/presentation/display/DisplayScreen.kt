@@ -9,23 +9,21 @@ import android.view.SurfaceView
 import android.view.WindowManager
 import android.widget.FrameLayout
 import androidx.activity.compose.BackHandler
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.offset
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.MoreVert
@@ -44,11 +42,14 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -72,6 +73,7 @@ import com.desklink.android.service.MirrorConnectionService
 import kotlin.math.abs
 import kotlin.math.hypot
 import kotlin.math.max
+import kotlin.math.roundToInt
 
 @SuppressLint("ClickableViewAccessibility")
 @Composable
@@ -82,29 +84,12 @@ fun DisplayScreen(
 ) {
     val context = LocalContext.current
 
-    // Floating control, hidden by default so it never blocks the mirror. A THREE-finger
-    // tap reveals it (one/two-finger gestures drive the remote / scroll+zoom); it
-    // auto-hides after a few idle seconds.
-    var controlsShown by remember { mutableStateOf(false) }
+    // Floating controls handle: always visible, draggable anywhere, position persisted, and
+    // dimmed while idle. Using a fixed on-screen handle (not a multi-finger gesture) avoids
+    // clashing with the tablet's system gestures.
     var controlsExpanded by remember { mutableStateOf(false) }
-    var interactionNonce by remember { mutableIntStateOf(0) }
 
-    val revealControls = {
-        controlsShown = true
-        interactionNonce++
-    }
-
-    LaunchedEffect(controlsShown, interactionNonce) {
-        if (controlsShown) {
-            delay(CONTROLS_AUTO_HIDE_MS)
-            controlsShown = false
-            controlsExpanded = false
-        }
-    }
-
-    // Gesture recognizers. Three-finger tap = reveal controls; single-finger long-press =
-    // right-click. Both pure/testable; timing runs on the composition scope.
-    val controlTapDetector = remember { ControlTapDetector() }
+    // Single-finger long-press = right-click. Timing runs on the composition scope.
     val longPressDetector = remember { LongPressDetector() }
     val gestureScope = rememberCoroutineScope()
 
@@ -210,8 +195,6 @@ fun DisplayScreen(
         val w = viewW.toFloat()
         val h = viewH.toFloat()
 
-        val tapOutcome =
-            controlTapDetector.onEvent(phase, count, event.eventTime, event.getX(0), event.getY(0))
         longPressDetector.onEvent(phase, count, event.eventTime, event.getX(0), event.getY(0))
 
         when (phase) {
@@ -342,8 +325,6 @@ fun DisplayScreen(
             PointerPhase.UP -> {
                 longPressJob?.cancel(); pressJob?.cancel()
 
-                if (tapOutcome.controlTap) revealControls()
-
                 if (!gestureMulti) {
                     when {
                         pressed && !longPressConsumed -> viewModel.sendPointerUp(lastNx, lastNy)
@@ -451,30 +432,21 @@ fun DisplayScreen(
             },
         )
 
-        AnimatedVisibility(
-            visible = controlsShown,
-            enter = fadeIn(),
-            exit = fadeOut(),
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .padding(top = 16.dp),
-        ) {
-            FloatingControl(
-                expanded = controlsExpanded,
-                onToggle = {
-                    controlsExpanded = !controlsExpanded
-                    interactionNonce++
-                },
-                onSettings = {
-                    if (!exiting) {
-                        exiting = true
-                        viewModel.teardown()
-                        onOpenSettings()
-                    }
-                },
-                onDisconnect = { leaveToConnect() },
-            )
-        }
+        DraggableControls(
+            expanded = controlsExpanded,
+            initialFractionX = viewModel.controlHandleFractionX(),
+            initialFractionY = viewModel.controlHandleFractionY(),
+            onToggle = { controlsExpanded = !controlsExpanded },
+            onMoved = { fx, fy -> viewModel.saveControlHandleFraction(fx, fy) },
+            onSettings = {
+                if (!exiting) {
+                    exiting = true
+                    viewModel.teardown()
+                    onOpenSettings()
+                }
+            },
+            onDisconnect = { leaveToConnect() },
+        )
 
         val reconnecting = connectionState is ConnectionState.Reconnecting ||
             connectionState is ConnectionState.Connecting ||
@@ -515,8 +487,14 @@ private fun ReconnectingOverlay(modifier: Modifier = Modifier) {
     }
 }
 
-/** Idle time before the floating control auto-hides after being revealed. */
-private const val CONTROLS_AUTO_HIDE_MS = 8_000L
+/** Idle time before the always-visible controls handle dims. */
+private const val CONTROLS_IDLE_DIM_MS = 4_000L
+
+/** Opacity the controls handle fades to while idle (brightens on touch / when expanded). */
+private const val CONTROLS_DIM_ALPHA = 0.4f
+
+/** Diameter of the draggable controls handle (matches GlassCircleButton). */
+private val HANDLE_SIZE = 48.dp
 
 /** Max gap between the last scroll movement and the finger lift for a fling to start. */
 private const val FLING_MAX_RELEASE_GAP_MS = 60L
@@ -557,17 +535,87 @@ private fun MotionEvent.toPointerPhase(): PointerPhase? = when (actionMasked) {
 /** Cubic-bezier(.4,0,.2,1) — the "standard" easing used throughout the handoff. */
 private val StandardEasing = CubicBezierEasing(0.4f, 0f, 0.2f, 1f)
 
+/**
+ * Always-visible controls: a draggable handle whose position is restored from and saved to
+ * [onMoved], dimmed while idle. Uses a fixed on-screen affordance (not a multi-finger
+ * gesture) so it never clashes with the tablet's own system gestures.
+ */
+@Composable
+private fun DraggableControls(
+    expanded: Boolean,
+    initialFractionX: Float,
+    initialFractionY: Float,
+    onToggle: () -> Unit,
+    onMoved: (fractionX: Float, fractionY: Float) -> Unit,
+    onSettings: () -> Unit,
+    onDisconnect: () -> Unit,
+) {
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        val density = LocalDensity.current
+        val handlePx = with(density) { HANDLE_SIZE.toPx() }
+        // Draggable range for the handle's top-left, keeping it fully on-screen.
+        val rangeX = (constraints.maxWidth - handlePx).coerceAtLeast(1f)
+        val rangeY = (constraints.maxHeight - handlePx).coerceAtLeast(1f)
+
+        var hx by remember { mutableFloatStateOf((initialFractionX * rangeX).coerceIn(0f, rangeX)) }
+        var hy by remember { mutableFloatStateOf((initialFractionY * rangeY).coerceIn(0f, rangeY)) }
+
+        // Dim while idle; brighten on interaction; stay bright while expanded.
+        var interaction by remember { mutableIntStateOf(0) }
+        var idle by remember { mutableStateOf(false) }
+        LaunchedEffect(interaction, expanded) {
+            idle = false
+            if (!expanded) {
+                delay(CONTROLS_IDLE_DIM_MS)
+                idle = true
+            }
+        }
+        val dim by animateFloatAsState(
+            targetValue = if (idle && !expanded) CONTROLS_DIM_ALPHA else 1f,
+            animationSpec = tween(durationMillis = 300),
+            label = "controlsDim",
+        )
+
+        Box(
+            modifier = Modifier
+                .offset { IntOffset(hx.coerceIn(0f, rangeX).roundToInt(), hy.coerceIn(0f, rangeY).roundToInt()) }
+                .alpha(dim),
+        ) {
+            FloatingControl(
+                expanded = expanded,
+                expandLeft = hx > rangeX / 2f, // expand toward screen center so buttons stay on-screen
+                onToggle = { interaction++; onToggle() },
+                onSettings = onSettings,
+                onDisconnect = onDisconnect,
+                handleModifier = Modifier.pointerInput(rangeX, rangeY) {
+                    detectDragGestures(
+                        onDragStart = { interaction++ },
+                        onDragEnd = {
+                            onMoved((hx / rangeX).coerceIn(0f, 1f), (hy / rangeY).coerceIn(0f, 1f))
+                        },
+                    ) { change, drag ->
+                        change.consume()
+                        hx = (hx + drag.x).coerceIn(0f, rangeX)
+                        hy = (hy + drag.y).coerceIn(0f, rangeY)
+                    }
+                },
+            )
+        }
+    }
+}
+
 @Composable
 private fun FloatingControl(
     expanded: Boolean,
+    expandLeft: Boolean,
     onToggle: () -> Unit,
     onSettings: () -> Unit,
     onDisconnect: () -> Unit,
-    modifier: Modifier = Modifier,
+    handleModifier: Modifier = Modifier,
 ) {
     val expand by animateFloatAsState(
         targetValue = if (expanded) 1f else 0f,
-        animationSpec = tween(durationMillis = 340, easing = StandardEasing),
+        animationSpec = tween(durationMillis = 300, easing = StandardEasing),
         label = "overlayExpand",
     )
     val handleRotation by animateFloatAsState(
@@ -586,23 +634,25 @@ private fun FloatingControl(
         label = "handleBorder",
     )
 
-    val groupContentWidth = 108.dp
-    val shadowSlack = 14.dp
+    val density = LocalDensity.current
+    val handlePx = with(density) { HANDLE_SIZE.toPx() }
+    val gapPx = with(density) { 12.dp.toPx() }
+    // Group = two 48dp buttons + a 12dp gap.
+    val groupWidthPx = with(density) { (48.dp * 2 + 12.dp).toPx() }
 
-    Row(
-        modifier = modifier,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Box(
-            modifier = Modifier
-                .width((groupContentWidth + shadowSlack) * expand)
-                .graphicsLayer {
-                    alpha = expand
-                    translationX = (1f - expand) * 14.dp.toPx()
-                }
-                .clipToBounds(),
-        ) {
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+    // The handle is anchored at (0,0); the expandable group is drawn beside it (toward
+    // screen center) without shifting the handle, so dragging stays predictable.
+    Box {
+        if (expand > 0f) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier
+                    .offset {
+                        val x = if (expandLeft) -(groupWidthPx + gapPx) else (handlePx + gapPx)
+                        IntOffset(x.roundToInt(), 0)
+                    }
+                    .graphicsLayer { alpha = expand },
+            ) {
                 GlassCircleButton(
                     icon = Icons.Outlined.Settings,
                     contentDescription = "Settings",
@@ -625,7 +675,7 @@ private fun FloatingControl(
             containerColor = handleFill,
             borderColor = handleBorder,
             iconTint = if (expanded) Color.White else DeskLinkTokens.TextPrimary,
-            modifier = Modifier.graphicsLayer { rotationZ = handleRotation },
+            modifier = handleModifier.graphicsLayer { rotationZ = handleRotation },
         )
     }
 }
