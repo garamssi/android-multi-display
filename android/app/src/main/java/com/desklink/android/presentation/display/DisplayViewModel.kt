@@ -156,18 +156,6 @@ class DisplayViewModel @Inject constructor(
         }
     }
 
-    /** Forwards a batch of touches to the server. */
-    fun sendTouches(events: List<TouchEvent>) {
-        if (events.isEmpty()) return
-        viewModelScope.launch {
-            if (events.size == 1) {
-                sendTouchUseCase.send(events.first())
-            } else {
-                sendTouchUseCase.sendBatch(events)
-            }
-        }
-    }
-
     /**
      * Releases an in-flight single touch on the Mac. Called when a second finger
      * lands and the gesture becomes an app-owned multi-touch: the first finger's
@@ -180,16 +168,33 @@ class DisplayViewModel @Inject constructor(
         }
     }
 
-    /** A CANCEL touch for the primary pointer at a normalized position (releases an
-     *  in-flight left press on the Mac). */
-    private fun cancelTouchEvent(x: Float, y: Float) = TouchEvent(
-        action = TouchEvent.Action.CANCEL,
+    /** Presses the primary pointer down at a normalized position (mouse-down on the Mac). */
+    fun sendPointerDown(x: Float, y: Float) = sendPrimary(TouchEvent.Action.DOWN, x, y)
+
+    /** Moves the primary pointer. Before a DOWN it reads as a hover; after, as a drag —
+     *  the Mac classifies it by whether the pointer is currently held. */
+    fun sendPointerMove(x: Float, y: Float) = sendPrimary(TouchEvent.Action.MOVE, x, y)
+
+    /** Releases the primary pointer (mouse-up on the Mac). */
+    fun sendPointerUp(x: Float, y: Float) = sendPrimary(TouchEvent.Action.UP, x, y)
+
+    private fun sendPrimary(action: TouchEvent.Action, x: Float, y: Float) {
+        viewModelScope.launch { sendTouchUseCase.send(primaryTouch(action, x, y)) }
+    }
+
+    /** A single primary-pointer (id 0) touch of [action] at a normalized position. */
+    private fun primaryTouch(action: TouchEvent.Action, x: Float, y: Float) = TouchEvent(
+        action = action,
         x = x.coerceIn(0f, 1f),
         y = y.coerceIn(0f, 1f),
         pressure = 0.toUShort(),
         pointerId = 0.toUByte(),
         timestampUs = System.nanoTime() / 1000L,
     )
+
+    /** A CANCEL touch for the primary pointer at a normalized position (releases an
+     *  in-flight left press on the Mac). */
+    private fun cancelTouchEvent(x: Float, y: Float) = primaryTouch(TouchEvent.Action.CANCEL, x, y)
 
     /** Full teardown: stop video stream, close input, disconnect control, release decoder. */
     fun teardown() {

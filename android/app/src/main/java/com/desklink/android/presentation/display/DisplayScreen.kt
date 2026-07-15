@@ -7,6 +7,7 @@ import android.view.MotionEvent
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.WindowManager
+import android.widget.FrameLayout
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
@@ -34,6 +35,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -59,7 +61,6 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import com.desklink.android.data.codec.VsyncRenderer
-import com.desklink.android.data.input.TouchCollector
 import com.desklink.android.domain.model.ConnectionState
 import com.desklink.android.presentation.components.AppGlyph
 import com.desklink.android.presentation.components.GlassCircleButton
@@ -68,7 +69,9 @@ import com.desklink.android.presentation.components.SpinnerRing
 import com.desklink.android.presentation.theme.DeskLinkTokens
 import com.desklink.android.presentation.theme.PlexSans
 import com.desklink.android.service.MirrorConnectionService
+import kotlin.math.hypot
 
+@SuppressLint("ClickableViewAccessibility")
 @Composable
 fun DisplayScreen(
     onDisconnected: () -> Unit,
@@ -77,13 +80,11 @@ fun DisplayScreen(
 ) {
     val context = LocalContext.current
 
-    // The floating control is hidden by default so it never blocks the mirror. A
-    // two-finger tap reveals it (a single tap can't be used — it is forwarded to the
-    // Mac as a remote touch); it auto-hides after a few idle seconds.
+    // Floating control, hidden by default so it never blocks the mirror. A THREE-finger
+    // tap reveals it (one/two-finger gestures drive the remote / scroll+zoom); it
+    // auto-hides after a few idle seconds.
     var controlsShown by remember { mutableStateOf(false) }
-    // Whether the Settings / Disconnect buttons are expanded next to the handle.
     var controlsExpanded by remember { mutableStateOf(false) }
-    // Bumped on every interaction to restart the auto-hide countdown.
     var interactionNonce by remember { mutableIntStateOf(0) }
 
     val revealControls = {
@@ -91,8 +92,6 @@ fun DisplayScreen(
         interactionNonce++
     }
 
-    // Auto-hide the control after an idle period. Re-armed whenever the control is
-    // shown or the user interacts (interactionNonce changes).
     LaunchedEffect(controlsShown, interactionNonce) {
         if (controlsShown) {
             delay(CONTROLS_AUTO_HIDE_MS)
@@ -101,35 +100,44 @@ fun DisplayScreen(
         }
     }
 
-    // Two-finger tap = "reveal controls". Multi-touch gestures are reserved for the
-    // app and not forwarded to the Mac; single-finger touches drive the remote.
-    val twoFingerDetector = remember { TwoFingerTapDetector() }
-
-    // Single-finger long-press = right-click. Timing runs on the composition scope; the
-    // detector stays pure. `longPressConsumed` swallows the rest of the gesture after a
-    // right-click fires so the trailing MOVE/UP don't move or re-press the Mac cursor.
+    // Gesture recognizers. Three-finger tap = reveal controls; single-finger long-press =
+    // right-click. Both pure/testable; timing runs on the composition scope.
+    val controlTapDetector = remember { ControlTapDetector() }
     val longPressDetector = remember { LongPressDetector() }
     val gestureScope = rememberCoroutineScope()
-    var longPressJob by remember { mutableStateOf<Job?>(null) }
-    var longPressConsumed by remember { mutableStateOf(false) }
 
-    // Inertial scroll: track the two-finger scroll velocity and, on release, keep
-    // emitting decaying SCROLL deltas so the content glides like a real tablet.
+    // Local pinch-zoom of the mirror view (client-side; Mac not involved).
+    val zoom = remember { ViewZoom() }
+    // The transformed SurfaceView, so the zoom transform can be applied to it directly.
+    var surfaceView by remember { mutableStateOf<SurfaceView?>(null) }
+
+    // Single-finger press is debounced: on DOWN the cursor tracks (hover) but the press is
+    // withheld briefly; if a second finger lands first the press is cancelled — so two
+    // fingers NEVER emit a click. Committed after PRESS_DEBOUNCE_MS if still one finger.
+    var awaitingPress by remember { mutableStateOf(false) }
+    var pressed by remember { mutableStateOf(false) }
+    var longPressConsumed by remember { mutableStateOf(false) }
+    var gestureMulti by remember { mutableStateOf(false) }
+    var pressJob by remember { mutableStateOf<Job?>(null) }
+    var longPressJob by remember { mutableStateOf<Job?>(null) }
+    var lastNx by remember { mutableFloatStateOf(0f) }
+    var lastNy by remember { mutableFloatStateOf(0f) }
+
+    // Two-finger pinch/pan tracking (screen px; the touch layer is untransformed).
+    var prevPinchDist by remember { mutableFloatStateOf(0f) }
+    var prevCx by remember { mutableFloatStateOf(0f) }
+    var prevCy by remember { mutableFloatStateOf(0f) }
+
+    // Inertial scroll (two-finger, only while not zoomed).
     val velocityTracker = remember { VelocityTracker2D() }
     val flingDecay = remember { FlingDecay() }
     var flingJob by remember { mutableStateOf<Job?>(null) }
     var scrolling by remember { mutableStateOf(false) }
     var lastScrollTimeMs by remember { mutableLongStateOf(0L) }
 
-    // Shared control-channel state. Drives the reconnecting overlay and the automatic
-    // return to Connect when the link is terminally lost.
     val connectionState by viewModel.connectionState.collectAsStateWithLifecycle()
-
-    // Guards the one-time exit so manual disconnect and the state-driven exit (or the
-    // Disconnected emitted by teardown itself) can't navigate twice.
     var exiting by remember { mutableStateOf(false) }
 
-    // Single exit path: tear down the pipeline and leave to the Connect screen.
     val leaveToConnect = {
         if (!exiting) {
             exiting = true
@@ -138,9 +146,6 @@ fun DisplayScreen(
         }
     }
 
-    // Auto-terminate mirroring when the connection is terminally lost (Mac stopped,
-    // USB pulled, or reconnect attempts exhausted) instead of freezing on the last
-    // frame. Transient Reconnecting/Connecting states keep the overlay up instead.
     LaunchedEffect(connectionState) {
         val state = connectionState
         if (state is ConnectionState.Error || state is ConnectionState.Disconnected) {
@@ -148,10 +153,8 @@ fun DisplayScreen(
         }
     }
 
-    // Vsync renderer drives the decoder's render loop via the view model.
     val vsyncRenderer = remember { VsyncRenderer(renderTick = { viewModel.renderFrame() }) }
 
-    // Immersive fullscreen mode + renderer lifecycle.
     DisposableEffect(Unit) {
         val activity = context as? Activity
         activity?.let {
@@ -163,7 +166,6 @@ fun DisplayScreen(
             it.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
         vsyncRenderer.start()
-
         onDispose {
             vsyncRenderer.stop()
             activity?.let {
@@ -175,17 +177,192 @@ fun DisplayScreen(
         }
     }
 
-    // Keep the connection alive while this session is active — including when the app
-    // is minimized (the composition is retained on background, so onDispose runs only
-    // when we actually LEAVE the Display screen, not on minimize). This stops the OS
-    // from freezing the process and dropping the keep-alive.
     DisposableEffect(Unit) {
         MirrorConnectionService.start(context)
         onDispose { MirrorConnectionService.stop(context) }
     }
 
-    // Hardware back: tear down decoder/sockets, then leave the screen.
     BackHandler { leaveToConnect() }
+
+    // Applies the current local zoom to the rendered SurfaceView (pivot top-left).
+    fun applyZoom() {
+        surfaceView?.let {
+            it.scaleX = zoom.scale
+            it.scaleY = zoom.scale
+            it.translationX = zoom.offsetX
+            it.translationY = zoom.offsetY
+        }
+    }
+
+    // Core gesture router. `viewW`/`viewH` are the untransformed touch layer size (px), so
+    // getX/getY are screen-space; touch coordinates are inverse-mapped through the zoom.
+    fun handleTouch(event: MotionEvent, viewW: Int, viewH: Int) {
+        val phase = event.toPointerPhase() ?: return
+        val count = event.pointerCount
+        val w = viewW.toFloat()
+        val h = viewH.toFloat()
+
+        val tapOutcome =
+            controlTapDetector.onEvent(phase, count, event.eventTime, event.getX(0), event.getY(0))
+        longPressDetector.onEvent(phase, count, event.eventTime, event.getX(0), event.getY(0))
+
+        when (phase) {
+            PointerPhase.DOWN -> {
+                gestureMulti = false
+                longPressConsumed = false
+                flingJob?.cancel(); flingJob = null
+                velocityTracker.reset(); scrolling = false; lastScrollTimeMs = 0L
+
+                val nx = zoom.contentNormalizedX(event.getX(0), w)
+                val ny = zoom.contentNormalizedY(event.getY(0), h)
+                lastNx = nx; lastNy = ny
+                // Position the cursor immediately (hover); withhold the press.
+                viewModel.sendPointerMove(nx, ny)
+                awaitingPress = true; pressed = false
+
+                pressJob?.cancel()
+                pressJob = gestureScope.launch {
+                    delay(PRESS_DEBOUNCE_MS)
+                    if (awaitingPress && !gestureMulti) {
+                        viewModel.sendPointerDown(lastNx, lastNy)
+                        pressed = true; awaitingPress = false
+                    }
+                }
+
+                longPressJob?.cancel()
+                longPressJob = gestureScope.launch {
+                    delay(longPressDetector.longPressThresholdMs)
+                    if (longPressDetector.fireIfElapsed(SystemClock.uptimeMillis())) {
+                        val rx = zoom.contentNormalizedX(longPressDetector.anchorX, w)
+                        val ry = zoom.contentNormalizedY(longPressDetector.anchorY, h)
+                        // The press has committed by now (debounce << long-press); release
+                        // it then right-click, in order.
+                        viewModel.sendLongPressRightClick(rx, ry)
+                        longPressConsumed = true
+                        pressed = false
+                    }
+                }
+            }
+
+            PointerPhase.POINTER_DOWN -> {
+                // A second/third finger: this can never be a single-finger touch.
+                longPressJob?.cancel()
+                pressJob?.cancel()
+                if (awaitingPress) {
+                    awaitingPress = false // press never committed -> no click leaks
+                } else if (pressed) {
+                    viewModel.cancelTouch(lastNx, lastNy) // release the committed press
+                    pressed = false
+                }
+                gestureMulti = true
+                flingJob?.cancel(); flingJob = null
+                if (count == 2) {
+                    prevPinchDist = pointerDistance(event)
+                    prevCx = pointerCentroidX(event); prevCy = pointerCentroidY(event)
+                } else {
+                    // 3+ fingers: stop two-finger scroll/zoom tracking.
+                    scrolling = false
+                    prevPinchDist = 0f
+                }
+            }
+
+            PointerPhase.MOVE -> when {
+                gestureMulti && count == 2 -> {
+                    val curDist = pointerDistance(event)
+                    val curCx = pointerCentroidX(event)
+                    val curCy = pointerCentroidY(event)
+                    if (prevPinchDist <= MIN_PINCH_DIST_PX) {
+                        // (Re)seed after two fingers land or a finger lifts/rejoins, so the
+                        // first delta isn't computed against a stale centroid.
+                        prevPinchDist = curDist; prevCx = curCx; prevCy = curCy
+                    } else {
+                        zoom.pinch(curDist / prevPinchDist, curCx, curCy, w, h)
+                        val dCx = curCx - prevCx
+                        val dCy = curCy - prevCy
+                        if (zoom.isZoomed) {
+                            zoom.pan(dCx, dCy, w, h) // pan the magnified view
+                        } else {
+                            // Not zoomed: two-finger drag scrolls the Mac. Track velocity for fling.
+                            val dxN = dCx / w
+                            val dyN = dCy / h
+                            viewModel.sendScroll(dxN, dyN)
+                            val dt = if (lastScrollTimeMs == 0L) flingDecay.frameMs
+                                else (event.eventTime - lastScrollTimeMs).coerceAtLeast(1L)
+                            velocityTracker.track(dxN, dyN, dt)
+                            lastScrollTimeMs = event.eventTime
+                            scrolling = true
+                        }
+                        applyZoom()
+                        prevPinchDist = curDist; prevCx = curCx; prevCy = curCy
+                    }
+                }
+
+                !gestureMulti && count == 1 -> {
+                    val nx = zoom.contentNormalizedX(event.getX(0), w)
+                    val ny = zoom.contentNormalizedY(event.getY(0), h)
+                    lastNx = nx; lastNy = ny
+                    // Hover (before commit) or drag (after) — the Mac classifies by down-state.
+                    if (!longPressConsumed) viewModel.sendPointerMove(nx, ny)
+                }
+            }
+
+            PointerPhase.POINTER_UP -> {
+                // A finger lifted mid-gesture; re-seed the pinch trackers on the next MOVE
+                // (pointer indices shift) and keep suppressing single-finger forwarding.
+                longPressJob?.cancel()
+                prevPinchDist = 0f
+            }
+
+            PointerPhase.UP -> {
+                longPressJob?.cancel(); pressJob?.cancel()
+
+                if (tapOutcome.controlTap) revealControls()
+
+                if (!gestureMulti) {
+                    when {
+                        pressed && !longPressConsumed -> viewModel.sendPointerUp(lastNx, lastNy)
+                        awaitingPress && !longPressConsumed -> {
+                            // Quick tap before the debounce elapsed -> a click.
+                            viewModel.sendPointerDown(lastNx, lastNy)
+                            viewModel.sendPointerUp(lastNx, lastNy)
+                        }
+                    }
+                }
+
+                // Fling the Mac scroll if released while still moving (only when not zoomed).
+                val sinceLastScroll =
+                    if (lastScrollTimeMs == 0L) Long.MAX_VALUE else event.eventTime - lastScrollTimeMs
+                if (scrolling && !zoom.isZoomed &&
+                    sinceLastScroll <= FLING_MAX_RELEASE_GAP_MS &&
+                    flingDecay.isActive(velocityTracker.velocityX, velocityTracker.velocityY)
+                ) {
+                    var vx = velocityTracker.velocityX
+                    var vy = velocityTracker.velocityY
+                    flingJob?.cancel()
+                    flingJob = gestureScope.launch {
+                        while (flingDecay.isActive(vx, vy)) {
+                            val (dx, dy) = flingDecay.step(vx, vy)
+                            viewModel.sendScroll(dx, dy)
+                            val decayed = flingDecay.decay(vx, vy)
+                            vx = decayed.first; vy = decayed.second
+                            delay(flingDecay.frameMs)
+                        }
+                    }
+                }
+
+                awaitingPress = false; pressed = false; gestureMulti = false
+                scrolling = false; prevPinchDist = 0f; longPressConsumed = false
+            }
+
+            PointerPhase.CANCEL -> {
+                longPressJob?.cancel(); pressJob?.cancel()
+                if (!gestureMulti && pressed && !longPressConsumed) viewModel.sendPointerUp(lastNx, lastNy)
+                awaitingPress = false; pressed = false; gestureMulti = false
+                scrolling = false; prevPinchDist = 0f; longPressConsumed = false
+                velocityTracker.reset()
+            }
+        }
+    }
 
     Box(
         modifier = Modifier
@@ -195,11 +372,14 @@ fun DisplayScreen(
         AndroidView(
             modifier = Modifier.fillMaxSize(),
             factory = { ctx ->
-                @SuppressLint("ClickableViewAccessibility")
-                SurfaceView(ctx).apply {
+                val container = FrameLayout(ctx)
+                val surface = SurfaceView(ctx).apply {
+                    // Pivot at top-left so the zoom transform matches ViewZoom's math
+                    // (screen = content * scale + offset).
+                    pivotX = 0f
+                    pivotY = 0f
                     holder.addCallback(object : SurfaceHolder.Callback {
                         override fun surfaceCreated(holder: SurfaceHolder) {
-                            // Surface ready — hand it to the decoder pipeline.
                             viewModel.onSurfaceAvailable(holder.surface)
                         }
 
@@ -209,8 +389,6 @@ fun DisplayScreen(
                             width: Int,
                             height: Int,
                         ) {
-                            // Surface (re)created at a known size; ensure the decoder
-                            // has the current surface.
                             viewModel.onSurfaceAvailable(holder.surface)
                         }
 
@@ -218,162 +396,35 @@ fun DisplayScreen(
                             viewModel.onSurfaceDestroyed()
                         }
                     })
-
-                    // Touch handling. Multi-finger gestures are intercepted for the app
-                    // (two-finger tap reveals the control); single-finger touches are
-                    // forwarded to the Mac as the remote cursor.
-                    setOnTouchListener { view, event ->
-                        val phase = event.toPointerPhase()
-                        if (phase != null) {
-                            // Long-press -> right-click. Feed the detector, then schedule a
-                            // fire check one threshold after DOWN; cancel it as soon as the
-                            // gesture can't be a long-press (lift or second finger).
-                            longPressDetector.onEvent(
-                                phase = phase,
-                                pointerCount = event.pointerCount,
-                                eventTimeMs = event.eventTime,
-                                x = event.getX(0),
-                                y = event.getY(0),
-                            )
-                            when (phase) {
-                                PointerPhase.DOWN -> {
-                                    longPressConsumed = false
-                                    longPressJob?.cancel()
-                                    longPressJob = gestureScope.launch {
-                                        delay(longPressDetector.longPressThresholdMs)
-                                        if (longPressDetector.fireIfElapsed(SystemClock.uptimeMillis())) {
-                                            val nx = (longPressDetector.anchorX / view.width.coerceAtLeast(1))
-                                                .coerceIn(0f, 1f)
-                                            val ny = (longPressDetector.anchorY / view.height.coerceAtLeast(1))
-                                                .coerceIn(0f, 1f)
-                                            // The DOWN was already forwarded as a left press;
-                                            // release it then right-click, in order.
-                                            viewModel.sendLongPressRightClick(nx, ny)
-                                            longPressConsumed = true
-                                        }
-                                    }
-                                    // A new touch stops any glide in progress (tap to catch),
-                                    // like a real tablet. Reset velocity for the new gesture.
-                                    flingJob?.cancel()
-                                    flingJob = null
-                                    velocityTracker.reset()
-                                    scrolling = false
-                                    lastScrollTimeMs = 0L
-                                }
-
-                                // The two-finger scroll ends when a finger lifts. If it was
-                                // still moving at release (not paused first), let it glide.
-                                PointerPhase.UP,
-                                PointerPhase.POINTER_UP -> {
-                                    longPressJob?.cancel()
-                                    val sinceLastScroll =
-                                        if (lastScrollTimeMs == 0L) Long.MAX_VALUE
-                                        else event.eventTime - lastScrollTimeMs
-                                    if (scrolling &&
-                                        sinceLastScroll <= FLING_MAX_RELEASE_GAP_MS &&
-                                        flingDecay.isActive(velocityTracker.velocityX, velocityTracker.velocityY)
-                                    ) {
-                                        var vx = velocityTracker.velocityX
-                                        var vy = velocityTracker.velocityY
-                                        flingJob?.cancel()
-                                        flingJob = gestureScope.launch {
-                                            while (flingDecay.isActive(vx, vy)) {
-                                                val (dx, dy) = flingDecay.step(vx, vy)
-                                                viewModel.sendScroll(dx, dy)
-                                                val decayed = flingDecay.decay(vx, vy)
-                                                vx = decayed.first
-                                                vy = decayed.second
-                                                delay(flingDecay.frameMs)
-                                            }
-                                        }
-                                    }
-                                    scrolling = false
-                                }
-
-                                PointerPhase.CANCEL -> {
-                                    longPressJob?.cancel()
-                                    velocityTracker.reset()
-                                    scrolling = false
-                                }
-
-                                PointerPhase.POINTER_DOWN -> {
-                                    longPressJob?.cancel()
-                                    // A second finger begins a fresh scroll; stop any glide
-                                    // so it can't run alongside the new live scroll.
-                                    flingJob?.cancel()
-                                    flingJob = null
-                                }
-
-                                PointerPhase.MOVE -> Unit
-                            }
-
-                            val outcome = twoFingerDetector.onEvent(
-                                phase = phase,
-                                pointerCount = event.pointerCount,
-                                eventTimeMs = event.eventTime,
-                                primaryX = event.getX(0),
-                                primaryY = event.getY(0),
-                            )
-                            if (outcome.enteredMultiTouch) {
-                                // The first finger's DOWN was already forwarded; release
-                                // it so the Mac doesn't keep the button pressed.
-                                val nx = (event.getX(0) / view.width.coerceAtLeast(1)).coerceIn(0f, 1f)
-                                val ny = (event.getY(0) / view.height.coerceAtLeast(1)).coerceIn(0f, 1f)
-                                viewModel.cancelTouch(nx, ny)
-                            }
-                            if (outcome.twoFingerTap) {
-                                revealControls()
-                            }
-                            if (outcome.scrollDx != 0f || outcome.scrollDy != 0f) {
-                                // Two-finger drag -> scroll. Normalize the px delta to a
-                                // fraction of the view (device-independent) for the Mac.
-                                val dxNorm = outcome.scrollDx / view.width.coerceAtLeast(1)
-                                val dyNorm = outcome.scrollDy / view.height.coerceAtLeast(1)
-                                viewModel.sendScroll(dxNorm, dyNorm)
-                                // Track velocity (normalized units/ms) for the release fling.
-                                val dt = if (lastScrollTimeMs == 0L) flingDecay.frameMs
-                                    else (event.eventTime - lastScrollTimeMs).coerceAtLeast(1L)
-                                velocityTracker.track(dxNorm, dyNorm, dt)
-                                lastScrollTimeMs = event.eventTime
-                                scrolling = true
-                            }
-                            if (outcome.suppressForward) {
-                                return@setOnTouchListener true
-                            }
-                        }
-
-                        // A long-press already became a right-click; swallow the rest of
-                        // this gesture so its trailing MOVE/UP aren't forwarded as a left
-                        // drag/hover on the Mac.
-                        if (longPressConsumed) {
-                            return@setOnTouchListener true
-                        }
-
-                        val touches = TouchCollector.collect(event, view.width, view.height)
-                        if (touches.isNotEmpty()) {
-                            viewModel.sendTouches(touches)
-                        }
-                        // Consume moves/downs so we keep receiving the gesture stream.
-                        when (event.actionMasked) {
-                            MotionEvent.ACTION_DOWN,
-                            MotionEvent.ACTION_POINTER_DOWN,
-                            MotionEvent.ACTION_MOVE,
-                            MotionEvent.ACTION_UP,
-                            MotionEvent.ACTION_POINTER_UP,
-                            MotionEvent.ACTION_CANCEL -> true
-
-                            else -> false
-                        }
-                    }
-                    keepScreenOn = true
                 }
+                container.addView(
+                    surface,
+                    FrameLayout.LayoutParams(
+                        FrameLayout.LayoutParams.MATCH_PARENT,
+                        FrameLayout.LayoutParams.MATCH_PARENT,
+                    ),
+                )
+                // Touches land on the (untransformed) container, so getX/getY are
+                // screen-space regardless of the SurfaceView's zoom transform.
+                container.setOnTouchListener { v, event ->
+                    handleTouch(event, v.width, v.height)
+                    when (event.actionMasked) {
+                        MotionEvent.ACTION_DOWN,
+                        MotionEvent.ACTION_POINTER_DOWN,
+                        MotionEvent.ACTION_MOVE,
+                        MotionEvent.ACTION_UP,
+                        MotionEvent.ACTION_POINTER_UP,
+                        MotionEvent.ACTION_CANCEL -> true
+
+                        else -> false
+                    }
+                }
+                container.keepScreenOn = true
+                surfaceView = surface
+                container
             },
         )
 
-        // Floating control (spec §6). Hidden until a two-finger tap reveals it, then
-        // auto-hides. The glass handle sits at the top-center; tapping it expands two
-        // extra buttons (Settings + Disconnect) to its LEFT. Compose consumes taps on
-        // these buttons; every other touch falls through to the SurfaceView.
         AnimatedVisibility(
             visible = controlsShown,
             enter = fadeIn(),
@@ -386,11 +437,9 @@ fun DisplayScreen(
                 expanded = controlsExpanded,
                 onToggle = {
                     controlsExpanded = !controlsExpanded
-                    interactionNonce++ // keep the control up while the user is using it
+                    interactionNonce++
                 },
                 onSettings = {
-                    // Leave to Settings (not Connect): set the exit guard so the
-                    // Disconnected from teardown doesn't also navigate to Connect.
                     if (!exiting) {
                         exiting = true
                         viewModel.teardown()
@@ -401,8 +450,6 @@ fun DisplayScreen(
             )
         }
 
-        // While the link is re-establishing, dim the frozen frame and show a spinner
-        // so the stale image is never mistaken for a live one.
         val reconnecting = connectionState is ConnectionState.Reconnecting ||
             connectionState is ConnectionState.Connecting ||
             connectionState is ConnectionState.Handshaking ||
@@ -445,9 +492,23 @@ private fun ReconnectingOverlay(modifier: Modifier = Modifier) {
 /** Idle time before the floating control auto-hides after being revealed. */
 private const val CONTROLS_AUTO_HIDE_MS = 8_000L
 
-/** Max gap between the last scroll movement and the finger lift for a fling to start.
- *  A longer pause means the user deliberately stopped, so the content should not glide. */
+/** Max gap between the last scroll movement and the finger lift for a fling to start. */
 private const val FLING_MAX_RELEASE_GAP_MS = 60L
+
+/** How long the first finger's press is withheld to see if a second finger joins (so a
+ *  two-finger gesture never emits a click). Short enough to feel responsive. */
+private const val PRESS_DEBOUNCE_MS = 60L
+
+/** Guards against a divide-by-~zero when a two-finger gesture starts with the fingers
+ *  almost coincident. */
+private const val MIN_PINCH_DIST_PX = 1f
+
+private fun pointerDistance(event: MotionEvent): Float =
+    hypot(event.getX(0) - event.getX(1), event.getY(0) - event.getY(1))
+
+private fun pointerCentroidX(event: MotionEvent): Float = (event.getX(0) + event.getX(1)) / 2f
+
+private fun pointerCentroidY(event: MotionEvent): Float = (event.getY(0) + event.getY(1)) / 2f
 
 /** Maps an Android MotionEvent to the detector's coarse phase (null = ignored). */
 private fun MotionEvent.toPointerPhase(): PointerPhase? = when (actionMasked) {
@@ -471,13 +532,11 @@ private fun FloatingControl(
     onDisconnect: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    // 0 (collapsed) → 1 (expanded). Drives width reveal, fade, slide and gap.
     val expand by animateFloatAsState(
         targetValue = if (expanded) 1f else 0f,
         animationSpec = tween(durationMillis = 340, easing = StandardEasing),
         label = "overlayExpand",
     )
-    // Handle rotates 90° and turns accent-filled when open (.3s).
     val handleRotation by animateFloatAsState(
         targetValue = if (expanded) 90f else 0f,
         animationSpec = tween(durationMillis = 300, easing = StandardEasing),
@@ -494,11 +553,6 @@ private fun FloatingControl(
         label = "handleBorder",
     )
 
-    // Two 48dp buttons + 12dp inter-button gap = 108dp of content. The clipped region
-    // is widened by a shadow-slack margin so the rightmost (Disconnect) button's 1dp
-    // border and drop shadow are never sliced at the clip edge — that slicing showed
-    // up as a half-rendered X. The slack doubles as the gap to the handle, so a
-    // separate spacer isn't needed.
     val groupContentWidth = 108.dp
     val shadowSlack = 14.dp
 
@@ -506,8 +560,6 @@ private fun FloatingControl(
         modifier = modifier,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // Expandable extras group (to the LEFT of the handle). Content is left-aligned,
-        // so the slack sits on the right of the X (transparent) — the reveal gap.
         Box(
             modifier = Modifier
                 .width((groupContentWidth + shadowSlack) * expand)
@@ -524,7 +576,6 @@ private fun FloatingControl(
                     onClick = onSettings,
                     enabled = expanded,
                 )
-                // Same neutral glass styling as the Settings button (no red tint).
                 GlassCircleButton(
                     icon = Icons.Outlined.Close,
                     contentDescription = "Disconnect",
@@ -534,7 +585,6 @@ private fun FloatingControl(
             }
         }
 
-        // Handle (the ⋯ button). Tapping it expands the group to its left.
         GlassCircleButton(
             icon = Icons.Outlined.MoreVert,
             contentDescription = "Controls",
