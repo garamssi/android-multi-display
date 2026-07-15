@@ -8,6 +8,8 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.IOException
 import java.io.OutputStream
@@ -41,6 +43,15 @@ class TCPClient @Inject constructor(
 ) {
     private var socket: Socket? = null
     private var outputStream: OutputStream? = null
+
+    /**
+     * Serializes writes. Touch/scroll sends are fire-and-forget (one coroutine per event),
+     * so without this two rapid sends could run on different `Dispatchers.IO` threads and
+     * interleave their bytes on the wire (corrupting the peer's framing) or complete out of
+     * order. The lock is held across the write, and callers acquire it in the order they
+     * were launched — so writes are atomic and stay FIFO (dispatch order == on-wire order).
+     */
+    private val sendMutex = Mutex()
 
     val isConnected: Boolean
         get() = socket?.isConnected == true && socket?.isClosed == false
@@ -88,11 +99,13 @@ class TCPClient @Inject constructor(
         socket?.soTimeout = millis
     }
 
-    suspend fun send(type: Byte, payload: ByteArray) = withContext(Dispatchers.IO) {
-        val stream = outputStream ?: throw IllegalStateException("Not connected")
-        val packet = PacketFramer.frame(type, payload)
-        stream.write(packet)
-        stream.flush()
+    suspend fun send(type: Byte, payload: ByteArray) = sendMutex.withLock {
+        withContext(Dispatchers.IO) {
+            val stream = outputStream ?: throw IllegalStateException("Not connected")
+            val packet = PacketFramer.frame(type, payload)
+            stream.write(packet)
+            stream.flush()
+        }
     }
 
     /**
