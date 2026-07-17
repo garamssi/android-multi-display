@@ -3,6 +3,7 @@ package com.desklink.android.data
 import com.desklink.android.data.input.InputRepositoryImpl
 import com.desklink.android.data.network.TCPClient
 import com.desklink.android.domain.model.TouchEvent
+import com.desklink.android.domain.model.ProtocolConstants
 import com.desklink.android.domain.transport.Transport
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -21,6 +22,9 @@ class InputRepositoryImplTest {
 
     private val transport = object : Transport {
         override suspend fun host() = "127.0.0.1"
+        override fun controlPort() = ProtocolConstants.PORT_CONTROL
+        override fun videoPort() = ProtocolConstants.PORT_VIDEO
+        override fun inputPort() = ProtocolConstants.PORT_INPUT
     }
 
     private fun touch() = TouchEvent(

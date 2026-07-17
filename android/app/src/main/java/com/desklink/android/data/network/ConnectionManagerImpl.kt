@@ -133,8 +133,9 @@ class ConnectionManagerImpl @Inject constructor(
 
             // Connect control channel to the transport-resolved host (USB loopback / LAN IP).
             val host = transport.host()
-            Log.i(TAG, "connecting control channel to $host:${ProtocolConstants.PORT_CONTROL}")
-            controlClient.connect(host, ProtocolConstants.PORT_CONTROL)
+            val port = transport.controlPort()
+            Log.i(TAG, "connecting control channel to $host:$port")
+            controlClient.connect(host, port)
 
             // Time-box the synchronous connect handshake (pairing auth + handshake) at the
             // socket level. With blocking reads (soTimeout=0) a coroutine withTimeout cannot

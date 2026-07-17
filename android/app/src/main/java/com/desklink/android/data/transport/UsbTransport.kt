@@ -13,4 +13,10 @@ import javax.inject.Singleton
 @Singleton
 class UsbTransport @Inject constructor() : Transport {
     override suspend fun host(): String = ProtocolConstants.LOOPBACK_HOST
+
+    override fun controlPort(): Int = ProtocolConstants.PORT_CONTROL
+
+    override fun videoPort(): Int = ProtocolConstants.PORT_VIDEO
+
+    override fun inputPort(): Int = ProtocolConstants.PORT_INPUT
 }

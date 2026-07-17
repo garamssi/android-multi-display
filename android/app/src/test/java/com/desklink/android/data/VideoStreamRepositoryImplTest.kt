@@ -4,6 +4,7 @@ import android.view.Surface
 import com.desklink.android.data.codec.HEVCDecoder
 import com.desklink.android.data.network.TCPClient
 import com.desklink.android.data.video.VideoStreamRepositoryImpl
+import com.desklink.android.domain.model.ProtocolConstants
 import com.desklink.android.domain.transport.Transport
 import io.mockk.every
 import io.mockk.mockk
@@ -23,6 +24,9 @@ class VideoStreamRepositoryImplTest {
 
     private val transport = object : Transport {
         override suspend fun host() = "127.0.0.1"
+        override fun controlPort() = ProtocolConstants.PORT_CONTROL
+        override fun videoPort() = ProtocolConstants.PORT_VIDEO
+        override fun inputPort() = ProtocolConstants.PORT_INPUT
     }
 
     @Test

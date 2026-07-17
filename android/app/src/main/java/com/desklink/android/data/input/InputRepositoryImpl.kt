@@ -4,7 +4,6 @@ import android.util.Log
 import com.desklink.android.data.network.TCPClient
 import com.desklink.android.domain.model.MessageType
 import com.desklink.android.domain.model.PointerButtonEvent
-import com.desklink.android.domain.model.ProtocolConstants
 import com.desklink.android.domain.model.ScrollEvent
 import com.desklink.android.domain.model.TouchEvent
 import com.desklink.android.domain.repository.InputRepository
@@ -13,9 +12,9 @@ import java.io.IOException
 import javax.inject.Inject
 
 /**
- * A-H4: Input-channel repository. Connects a [TCPClient] to
- * [ProtocolConstants.PORT_INPUT] and sends serialized TOUCH_EVENT (0x20) /
- * TOUCH_BATCH (0x21) messages back to the Mac server.
+ * A-H4: Input-channel repository. Connects a [TCPClient] to the transport-resolved
+ * input port and sends serialized TOUCH_EVENT (0x20) / TOUCH_BATCH (0x21) messages
+ * back to the Mac server.
  */
 class InputRepositoryImpl @Inject constructor(
     private val inputClient: TCPClient,
@@ -23,7 +22,7 @@ class InputRepositoryImpl @Inject constructor(
 ) : InputRepository {
 
     override suspend fun connect() {
-        inputClient.connect(transport.host(), ProtocolConstants.PORT_INPUT)
+        inputClient.connect(transport.host(), transport.inputPort())
     }
 
     override suspend fun sendTouchEvent(event: TouchEvent) {

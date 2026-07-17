@@ -7,7 +7,6 @@ import com.desklink.android.data.codec.VideoProtocol
 import com.desklink.android.data.network.TCPClient
 import com.desklink.android.domain.model.DisplayConfig
 import com.desklink.android.domain.model.MessageType
-import com.desklink.android.domain.model.ProtocolConstants
 import com.desklink.android.domain.repository.VideoStreamRepository
 import com.desklink.android.domain.transport.Transport
 import kotlinx.coroutines.CancellationException
@@ -19,7 +18,7 @@ import javax.inject.Inject
 /**
  * A-H5: Video-channel repository.
  *
- * Connects a [TCPClient] to [ProtocolConstants.PORT_VIDEO], parses the initial
+ * Connects a [TCPClient] to the transport-resolved video port, parses the initial
  * VIDEO_CONFIG (CodecID + uint16 length + Annex-B CSD) to configure the
  * [HEVCDecoder], then parses each VIDEO_FRAME (13-byte header -> PTS + keyframe
  * flag) and submits the NAL to the decoder. Emits [VideoStreamEvent]s describing
@@ -75,8 +74,9 @@ class VideoStreamRepositoryImpl @Inject constructor(
             configured = false
             try {
                 val host = transport.host()
-                Log.i(TAG, "connecting video channel to $host:${ProtocolConstants.PORT_VIDEO}")
-                videoClient.connect(host, ProtocolConstants.PORT_VIDEO)
+                val port = transport.videoPort()
+                Log.i(TAG, "connecting video channel to $host:$port")
+                videoClient.connect(host, port)
                 Log.i(TAG, "video channel connected; waiting for VIDEO_CONFIG. surface=${surface != null}")
 
                 var frameCount = 0

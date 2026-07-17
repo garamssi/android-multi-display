@@ -48,6 +48,9 @@ class ConnectionManagerImplTest {
     /** USB transport double: always dials loopback (P0 has USB only). */
     private fun fakeTransport() = object : Transport {
         override suspend fun host() = "127.0.0.1"
+        override fun controlPort() = ProtocolConstants.PORT_CONTROL
+        override fun videoPort() = ProtocolConstants.PORT_VIDEO
+        override fun inputPort() = ProtocolConstants.PORT_INPUT
     }
 
     /** No-auth key provider (USB / unpaired): the LAN auth handshake is skipped. */

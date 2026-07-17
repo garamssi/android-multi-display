@@ -1,22 +1,25 @@
 import Foundation
 
 /// Composition root that wires together the three DeskLink channels (S-L10):
-/// - Control (7100): handshake + PING/PONG liveness.
-/// - Video   (7101): capture → encode → stream (VIDEO_CONFIG then VIDEO_FRAME).
-/// - Input   (7102): receive TOUCH_EVENT/TOUCH_BATCH → inject.
+/// - Control: handshake + PING/PONG liveness.
+/// - Video:   capture → encode → stream (VIDEO_CONFIG then VIDEO_FRAME).
+/// - Input:   receive TOUCH_EVENT/TOUCH_BATCH → inject.
 ///
-/// Each channel gets its own `TCPServer`. By default the listeners bind loopback and
-/// ADB forwards all three ports (USB); when the user enables Wi-Fi, they bind all
-/// interfaces so LAN clients can also connect (see `listenerScope`).
-/// This object owns the transports and use cases and starts/stops them together.
+/// The channels are grouped into `ChannelStack`s, one per transport. The USB stack
+/// (loopback, plaintext, no PIN, 7100-7102) is always running; the LAN stack (all
+/// interfaces, TLS, PIN pairing, 7110-7112) runs alongside it when the user enables
+/// Wi-Fi. Both listen at once, so a USB client connects PIN-free even while Wi-Fi is up
+/// (the fix for USB breaking whenever Wi-Fi was enabled). Only one client streams at a
+/// time — a single shared video pipeline is bound to whichever stack negotiates first.
+/// This object owns the stacks and use cases and starts/stops them together.
 @MainActor
 public final class ServerCoordinator {
-    // Transports (one per channel). Recreated on each start() so their AsyncStreams
-    // are fresh: a Stop cancels the stream consumers, and an AsyncStream cannot be
-    // re-consumed, so reusing them would leave the next connection hanging forever.
-    private var controlServer = TCPServer()
-    private var videoServer = TCPServer()
-    private var inputServer = TCPServer()
+    // The two channel stacks. Recreated on each start() so their AsyncStreams are fresh:
+    // a Stop cancels the stream consumers, and an AsyncStream cannot be re-consumed, so
+    // reusing them would leave the next connection hanging forever. `lanStack` is nil
+    // when Wi-Fi serving is disabled.
+    private var usbStack: ChannelStack?
+    private var lanStack: ChannelStack?
 
     // Data-layer components.
     private let adbManager = ADBManager()
@@ -37,11 +40,6 @@ public final class ServerCoordinator {
     /// Lets a re-negotiation decide between a full reboot (resolution changed) and a
     /// cheap live bitrate change.
     private var currentStreamConfig: DisplayConfig?
-
-    /// Interface scope the listeners bind on, resolved once from the user's Wi-Fi opt-in
-    /// at `start()` and reused for any in-session rebind (bootStreaming re-creates the
-    /// video/input servers). Loopback = USB only; localNetwork = USB + LAN.
-    private var listenerScope: ListenerScope = .loopback
 
     /// Prevents overlapping boot/reboot sequences.
     private var isBooting = false
@@ -74,21 +72,38 @@ public final class ServerCoordinator {
     /// actually drive the display and encoder come from the negotiated config passed
     /// to `bootStreaming` via `onStreamStart`.
     public func start(config: DisplayConfig) async throws {
-        // Fresh transports/capturer each start (see property comment). Without this,
-        // a Stop → Start cycle reuses already-consumed AsyncStreams and the next
-        // client's handshake is never read → the tablet hangs on "connecting".
-        controlServer = TCPServer()
-        videoServer = TCPServer()
-        inputServer = TCPServer()
+        // Fresh stacks/capturer each start (see property comment). Without this, a
+        // Stop → Start cycle reuses already-consumed AsyncStreams and the next client's
+        // handshake is never read → the tablet hangs on "connecting".
+        // USB is always present (loopback, plaintext, no PIN). The LAN stack (TLS + PIN)
+        // is added only when the user opts into Wi-Fi serving; both then listen at once,
+        // so a USB client is never forced through the LAN stack's TLS/PIN.
+        let usb = ChannelStack(
+            kind: .usb,
+            scope: .loopback,
+            controlPort: ProtocolConstants.portControl,
+            videoPort: ProtocolConstants.portVideo,
+            inputPort: ProtocolConstants.portInput,
+            requiresPairing: false
+        )
+        let lan: ChannelStack? = TransportSettings.wifiEnabled
+            ? ChannelStack(
+                kind: .lan,
+                scope: .localNetwork,
+                controlPort: ProtocolConstants.portControlLan,
+                videoPort: ProtocolConstants.portVideoLan,
+                inputPort: ProtocolConstants.portInputLan,
+                requiresPairing: true
+            )
+            : nil
+        usbStack = usb
+        lanStack = lan
         screenCapturer = SCKScreenCapturer()
         for task in pipelineTasks { task.cancel() }
         pipelineTasks.removeAll()
         currentStreamConfig = nil
 
-        // Resolve the listener scope once for this session from the user's opt-in. USB
-        // (loopback) is the default; LAN binding is added only when Wi-Fi is enabled.
-        listenerScope = TransportSettings.wifiEnabled ? .localNetwork : .loopback
-        Log.info(.server, "starting servers scope=\(listenerScope == .localNetwork ? "loopback+LAN" : "loopback")")
+        Log.info(.server, "starting servers: USB(loopback 7100-7102)\(lan != nil ? " + LAN(TLS+PIN 7110-7112)" : "")")
 
         // Observability: server is now coming up and listening for a client.
         onStatusChange?(.connecting)
@@ -104,66 +119,71 @@ public final class ServerCoordinator {
         // leave the tablet unable to reach the Mac after "waiting for device".
         await portForwardingWatcher.start()
 
-        // Start ALL THREE servers listening up front so that, the moment the control
-        // channel sends START_STREAM, the client can immediately connect to the video
-        // (7101) and input (7102) sockets — no bind race. The video/input pipelines
-        // are wired later in bootStreaming, once the negotiated config is known.
+        // Advertise the LAN control channel over Bonjour so a tablet can find the Mac
+        // without a typed IP. USB (loopback) never advertises. The TXT record carries
+        // the OS version shown on the tablet's server card.
+        if let lan {
+            let version = ProcessInfo.processInfo.operatingSystemVersion
+            let osVersion = "macOS \(version.majorVersion).\(version.minorVersion)"
+            lan.controlServer.advertiseBonjour(
+                serviceType: ProtocolConstants.bonjourServiceType,
+                osVersion: osVersion
+            )
+        }
+
+        // Start every stack's three servers listening up front so that, the moment a
+        // control channel sends START_STREAM, the client can immediately connect to the
+        // matching video/input sockets — no bind race. The pipeline is wired later in
+        // bootStreaming, once the negotiated config is known.
         //
         // Failure-atomic: the watcher and any already-bound listener are started before
         // a bind can throw (e.g. a port still held from a prior run). If any bind fails,
         // roll everything back before rethrowing — otherwise the watcher's 1s poll loop
         // and a bound socket would linger with no teardown path (the caller only flips
         // UI state on catch, it does not know to stop us).
-        // In LAN mode, advertise the control channel over Bonjour so a tablet can find
-        // the Mac without a typed IP. USB (loopback) never advertises. The TXT record
-        // carries the OS version shown on the tablet's server card.
-        if listenerScope == .localNetwork {
-            let version = ProcessInfo.processInfo.operatingSystemVersion
-            let osVersion = "macOS \(version.majorVersion).\(version.minorVersion)"
-            controlServer.advertiseBonjour(
-                serviceType: ProtocolConstants.bonjourServiceType,
-                osVersion: osVersion
-            )
-        }
-
         do {
-            try await controlServer.start(port: ProtocolConstants.portControl, scope: listenerScope)
-            try await videoServer.start(port: ProtocolConstants.portVideo, scope: listenerScope)
-            try await inputServer.start(port: ProtocolConstants.portInput, scope: listenerScope)
+            try await usb.startListening()
+            try await lan?.startListening()
         } catch {
             await portForwardingWatcher.stop()
-            await controlServer.stop()
-            await videoServer.stop()
-            await inputServer.stop()
+            await usb.stop()
+            await lan?.stop()
             // Match stop()'s teardown: if the watcher already applied `adb reverse`
             // before the bind failed, remove it so a failed start leaves nothing behind.
             try? await adbManager.removePortForwarding()
+            usbStack = nil
+            lanStack = nil
             isRunning = false
             onStatusChange?(.disconnected)
             throw error
         }
 
-        // All three sockets are bound and listening — the server is officially up.
+        // All sockets are bound and listening — the server is officially up.
         isRunning = true
 
-        // Control channel (7100): handshake + config negotiation + PING/PONG.
-        // On successful negotiation, ControlChannelUseCase invokes onStreamStart with
-        // the negotiated config BEFORE sending START_STREAM, so the virtual display
-        // and encoder exist by the time the client connects to the video channel.
-        //
-        // The onClientConnected/onClientDisconnected hooks are pure observability:
-        // they surface the negotiated ClientInfo + DisplayConfig (device model,
-        // resolution, fps, codec) to the UI without altering the streaming flow.
-        // LAN requires PIN pairing; the key is derived from the CURRENT displayed PIN at
-        // each connection, so a rotated PIN is honored without restarting the server. USB
-        // (loopback) returns nil and skips auth.
-        let isLan = listenerScope == .localNetwork
+        // One control channel per stack. On successful negotiation, ControlChannelUseCase
+        // invokes onStreamStart with the negotiated config BEFORE sending START_STREAM, so
+        // the virtual display and encoder exist by the time the client connects to the
+        // video channel. The onClientConnected/onClientDisconnected hooks are pure
+        // observability (device model, resolution, fps, codec) with no effect on streaming.
+        startControlChannel(for: usb)
+        if let lan { startControlChannel(for: lan) }
+    }
+
+    /// Wires and runs the control channel for `stack`. LAN requires PIN pairing; its key
+    /// is derived from the CURRENT displayed PIN at each connection, so a rotated PIN is
+    /// honored without restarting the server. USB returns nil and skips auth. The stream
+    /// boot is routed back to this stack by `kind`, resolved on the MainActor so the
+    /// closures stay value-only and Sendable-safe.
+    private func startControlChannel(for stack: ChannelStack) {
+        let kind = stack.kind
+        let requiresPairing = stack.requiresPairing
         let control = ControlChannelUseCase(
-            server: controlServer,
-            receiver: controlServer,
-            authKeyProvider: { isLan ? PairingCrypto.derivePSK(pin: PairingPin.current) : nil },
+            server: stack.controlServer,
+            receiver: stack.controlServer,
+            authKeyProvider: { requiresPairing ? PairingCrypto.derivePSK(pin: PairingPin.current) : nil },
             onStreamStart: { [weak self] negotiated in
-                try await self?.bootStreaming(config: negotiated)
+                try await self?.bootStreaming(config: negotiated, transport: kind)
             },
             onClientConnected: { [weak self] info, negotiated in
                 await self?.handleClientConnected(info: info, config: negotiated)
@@ -189,18 +209,22 @@ public final class ServerCoordinator {
         onClientDisconnected?()
     }
 
-    /// Creates and starts the video/input pipeline for the negotiated `config`.
-    /// Called from the control channel's `onStreamStart` hook before START_STREAM is
-    /// sent, so the display and encoder are ready before the client connects to the
-    /// (already-listening) video channel.
+    /// Creates and starts the video/input pipeline for the negotiated `config`, bound to
+    /// the `transport` stack whose control channel negotiated it. Called from the control
+    /// channel's `onStreamStart` hook before START_STREAM is sent, so the display and
+    /// encoder are ready before the client connects to the (already-listening) video
+    /// channel.
     ///
-    /// Idempotent: only the first call per `start()` cycle takes effect; later
-    /// negotiations are ignored so we never double-create the display/encoder or
-    /// launch duplicate streaming loops.
-    private func bootStreaming(config: DisplayConfig) async throws {
+    /// The `isBooting` guard serializes overlapping boots. With one tablet (the supported
+    /// case) only one stack ever negotiates; if a second stack negotiated while streaming,
+    /// it would take the shared pipeline over — acceptable, since there is a single Mac
+    /// desktop to mirror.
+    private func bootStreaming(config: DisplayConfig, transport kind: TransportKind) async throws {
         guard !isBooting else { return }
         isBooting = true
         defer { isBooting = false }
+
+        guard let stack = (kind == .usb ? usbStack : lanStack) else { return }
 
         let previous = currentStreamConfig
         let isReconnect = previous != nil
@@ -218,20 +242,20 @@ public final class ServerCoordinator {
             for task in pipelineTasks { task.cancel() }
             pipelineTasks.removeAll()
             await screenCapturer.stopCapture()
-            await videoServer.stop()
-            await inputServer.stop()
+            await stack.videoServer.stop()
+            await stack.inputServer.stop()
             if resolutionChanged {
                 await displayManager.destroyDisplay()
             }
-            // Settle: let the OS release ports 7101/7102 and the private virtual
+            // Settle: let the OS release the video/input ports and the private virtual
             // display API quiesce before rebinding / recreating.
             try? await Task.sleep(nanoseconds: 300_000_000)
 
-            videoServer = TCPServer()
-            inputServer = TCPServer()
+            stack.videoServer = TCPServer()
+            stack.inputServer = TCPServer()
             screenCapturer = SCKScreenCapturer()
-            try await videoServer.start(port: ProtocolConstants.portVideo, scope: listenerScope)
-            try await inputServer.start(port: ProtocolConstants.portInput, scope: listenerScope)
+            try await stack.videoServer.start(port: stack.videoPort, scope: stack.scope)
+            try await stack.inputServer.start(port: stack.inputPort, scope: stack.scope)
         }
 
         // Bring up the virtual display at the CLIENT'S negotiated resolution (first
@@ -247,16 +271,16 @@ public final class ServerCoordinator {
         try await encoder.configure(config: config)
         currentStreamConfig = config
 
-        // Input channel (7102): receive touch → inject.
-        let receiveInput = ReceiveInputUseCase(receiver: inputServer, injector: injector, displayID: displayID)
+        // Input channel: receive touch → inject.
+        let receiveInput = ReceiveInputUseCase(receiver: stack.inputServer, injector: injector, displayID: displayID)
         pipelineTasks.append(Task { try? await receiveInput.run() })
 
-        // Video channel (7101): capture → encode → stream.
+        // Video channel: capture → encode → stream.
         let streaming = StartStreamingUseCase(
             displayManager: displayManager,
             screenCapturer: screenCapturer,
             encoder: encoder,
-            streamServer: videoServer
+            streamServer: stack.videoServer
         )
         pipelineTasks.append(Task { try? await streaming.execute(config: config, displayID: displayID) })
     }
@@ -274,9 +298,10 @@ public final class ServerCoordinator {
         pipelineTasks.removeAll()
         currentStreamConfig = nil
 
-        await inputServer.stop()
-        await controlServer.stop()
-        await videoServer.stop()
+        await usbStack?.stop()
+        await lanStack?.stop()
+        usbStack = nil
+        lanStack = nil
         await injector.stopReceiving()
         await screenCapturer.stopCapture()
         await displayManager.destroyDisplay()

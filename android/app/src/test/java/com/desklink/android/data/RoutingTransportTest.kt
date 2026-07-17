@@ -71,4 +71,23 @@ class RoutingTransportTest {
 
         assertEquals(ProtocolConstants.LOOPBACK_HOST, routing(settings).host())
     }
+
+    @Test
+    fun `USB mode uses the USB port set`() {
+        val routing = routing(settings())
+        assertEquals(ProtocolConstants.PORT_CONTROL, routing.controlPort())
+        assertEquals(ProtocolConstants.PORT_VIDEO, routing.videoPort())
+        assertEquals(ProtocolConstants.PORT_INPUT, routing.inputPort())
+    }
+
+    @Test
+    fun `LAN mode uses the separate LAN port set`() {
+        val settings = settings()
+        settings.setTransportMode(TransportMode.LAN)
+
+        val routing = routing(settings)
+        assertEquals(ProtocolConstants.PORT_CONTROL_LAN, routing.controlPort())
+        assertEquals(ProtocolConstants.PORT_VIDEO_LAN, routing.videoPort())
+        assertEquals(ProtocolConstants.PORT_INPUT_LAN, routing.inputPort())
+    }
 }

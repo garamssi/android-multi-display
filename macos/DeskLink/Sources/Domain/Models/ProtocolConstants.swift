@@ -3,10 +3,20 @@ import Foundation
 public enum ProtocolConstants {
     public static let protocolVersion = 1
 
-    // Ports
+    // USB ports (loopback, adb-reverse tunnelled). This stack is always plaintext and
+    // never PIN-gated: the cable is the trust boundary.
     public static let portControl: UInt16 = 7100
     public static let portVideo: UInt16 = 7101
     public static let portInput: UInt16 = 7102
+
+    // LAN ports (TLS + PIN pairing). A SEPARATE stack from USB so the Mac can serve
+    // both at once: with Wi-Fi always on for internet, a shared port set would force
+    // every connection (including the loopback USB one) through TLS/PIN and break USB.
+    // Distinguishing the transport by listener (loopback vs LAN) cannot be forged by a
+    // client, unlike a self-declared flag. USB never uses these.
+    public static let portControlLan: UInt16 = 7110
+    public static let portVideoLan: UInt16 = 7111
+    public static let portInputLan: UInt16 = 7112
 
     // Bonjour / NSD service type advertised on the control port when Wi-Fi (LAN) is
     // enabled, so a tablet can discover the Mac without a typed IP. This string is a

@@ -16,4 +16,16 @@ package com.desklink.android.domain.transport
 interface Transport {
     /** The host to dial for every channel (control/video/input use the same host). */
     suspend fun host(): String
+
+    /**
+     * Ports the channels dial. These differ by transport: USB uses the loopback-tunnelled
+     * 7100-7102; LAN uses a separate 7110-7112 set so the Mac can run a plaintext USB
+     * listener and a TLS+PIN LAN listener simultaneously. Resolved per connect (like
+     * [host]) so switching mode in Settings takes effect on the next connect.
+     */
+    fun controlPort(): Int
+
+    fun videoPort(): Int
+
+    fun inputPort(): Int
 }

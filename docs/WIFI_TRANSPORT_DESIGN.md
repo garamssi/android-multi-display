@@ -252,7 +252,7 @@ WiFi는 IP 변동/로밍 특성이 있다. 방금 하드닝한 `ConnectionManage
 | 항목 | 맥(서버) | 안드로이드(클라이언트) | 합의 지점 |
 |---|---|---|---|
 | 디스커버리 | `_desklink._tcp` 광고(`NWListener`) | `NsdManager` 검색/resolve | 서비스 타입·이름·TXT |
-| 주소/포트 | LAN 인터페이스 바인딩, 7100~7102 | 발견/입력 host + 동일 포트 | 포트 상수 |
+| 주소/포트 | LAN 스택 전용 포트 7110~7112(USB 7100~7102와 별개, 동시 리슨) | 발견/입력 host + LAN 포트 7110~7112 | 포트 상수 |
 | 보안 | TLS(PSK 또는 자체서명) 신원 | 동일 신뢰(PSK/핀 저장) | TLS 방식·신원 |
 | 페어링 | PIN 생성·표시·검증 | PIN 입력·키 저장 | 인증 프레임 golden vector |
 | 권한 | Local Network | NEARBY_WIFI_DEVICES(또는 PICKER) | 둘 다 필요 — 미부여 UX 짝 구현 |

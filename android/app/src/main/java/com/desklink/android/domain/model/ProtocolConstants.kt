@@ -8,10 +8,18 @@ object ProtocolConstants {
     // runtime instead. Kept here so the value isn't hardcoded inside the socket client.
     const val LOOPBACK_HOST = "127.0.0.1"
 
-    // Ports
+    // USB ports (loopback via adb reverse). Plaintext, no PIN — the cable is the trust
+    // boundary. The client picks the port set from the transport mode (see Transport).
     const val PORT_CONTROL = 7100
     const val PORT_VIDEO = 7101
     const val PORT_INPUT = 7102
+
+    // LAN ports (TLS + PIN). A SEPARATE stack from USB so the Mac can serve both at
+    // once; USB stays PIN-free on its own loopback ports while Wi-Fi is up. Must match
+    // the macOS server's portControlLan/portVideoLan/portInputLan.
+    const val PORT_CONTROL_LAN = 7110
+    const val PORT_VIDEO_LAN = 7111
+    const val PORT_INPUT_LAN = 7112
 
     // Bonjour/NSD service type the Mac advertises on the control port over Wi-Fi (LAN).
     // Cross-platform contract with the macOS server's `bonjourServiceType`. Discovery

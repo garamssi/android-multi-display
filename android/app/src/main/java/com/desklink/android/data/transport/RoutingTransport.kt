@@ -23,8 +23,18 @@ class RoutingTransport @Inject constructor(
     private val usb: UsbTransport,
     private val lan: LanTransport,
 ) : Transport {
-    override suspend fun host(): String = when (settings.currentTransportMode()) {
-        TransportMode.USB -> usb.host()
-        TransportMode.LAN -> lan.host()
+    override suspend fun host(): String = strategy().host()
+
+    override fun controlPort(): Int = strategy().controlPort()
+
+    override fun videoPort(): Int = strategy().videoPort()
+
+    override fun inputPort(): Int = strategy().inputPort()
+
+    /** The transport matching the user's current mode, read per call so host and ports
+     *  always come from the same strategy for a given connect. */
+    private fun strategy(): Transport = when (settings.currentTransportMode()) {
+        TransportMode.USB -> usb
+        TransportMode.LAN -> lan
     }
 }
