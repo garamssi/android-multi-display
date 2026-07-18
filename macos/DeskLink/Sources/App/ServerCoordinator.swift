@@ -44,6 +44,15 @@ public final class ServerCoordinator {
     /// Prevents overlapping boot/reboot sequences.
     private var isBooting = false
 
+    /// Pending "back to waiting" downgrade, debounced so a brief control-channel blip
+    /// that reconnects and re-negotiates within the grace window doesn't flap the UI.
+    private var pendingDowngrade: Task<Void, Never>?
+
+    /// Grace period before a last-client drop downgrades the UI to `.connecting`. Long
+    /// enough to absorb a transient control reconnect, short enough to reflect a real
+    /// unplug promptly.
+    private static let disconnectGraceNanos: UInt64 = 3_000_000_000
+
     // MARK: - Observability (UI wiring only — no effect on streaming behaviour)
 
     /// True between a successful `start()` and `stop()`. Guards late disconnect
@@ -112,6 +121,8 @@ public final class ServerCoordinator {
         pipelineTasks.removeAll()
         currentStreamConfig = nil
         connectedTransports.removeAll()
+        pendingDowngrade?.cancel()
+        pendingDowngrade = nil
 
         Log.info(.server, "starting servers: USB(loopback 7100-7102)\(lan != nil ? " + LAN(TLS+PIN 7110-7112)" : "")")
 
@@ -209,19 +220,36 @@ public final class ServerCoordinator {
 
     private func handleClientConnected(transport kind: TransportKind, info: ClientInfo, config: DisplayConfig) {
         guard isRunning else { return }
+        // A (re)connection cancels any pending downgrade so a quick reconnect never flaps
+        // the UI back to waiting.
+        pendingDowngrade?.cancel()
+        pendingDowngrade = nil
         connectedTransports.insert(kind)
-        Log.info(.server, "client connected on \(kind): \(info.deviceModel) \(config.width)x\(config.height) @\(config.fps) codec=\(config.codec)")
+        Log.info(.server, "client connected on \(kind): \(info.deviceModel) \(config.width)x\(config.height) @\(config.fps) codec=\(config.codec); connected=\(connectedTransports)")
         onClientConnected?(info, config)
     }
 
     private func handleClientDisconnected(transport kind: TransportKind) {
         guard isRunning else { return }
-        // A drop only surfaces to the UI once NO transport is still connected. This keeps
-        // a live client (e.g. USB) shown as connected when a probe/idle connection on the
-        // other stack's listener (e.g. LAN) times out.
-        guard connectedTransports.remove(kind) != nil, connectedTransports.isEmpty else { return }
-        Log.info(.server, "last client disconnected (\(kind); server still listening)")
-        onClientDisconnected?()
+        // Ignore drops from a peer that never negotiated (e.g. a probe/idle connection on
+        // the other stack's listener): it was never in the set, so it can't affect a live
+        // client's UI state.
+        guard connectedTransports.remove(kind) != nil else {
+            Log.info(.server, "ignoring drop on \(kind): no negotiated client there (connected=\(connectedTransports))")
+            return
+        }
+        Log.info(.server, "client dropped on \(kind); remaining=\(connectedTransports)")
+        // Only surface to the UI once NO transport is still connected, and only after a
+        // grace window (a control blip usually reconnects and re-negotiates before then).
+        guard connectedTransports.isEmpty else { return }
+        pendingDowngrade?.cancel()
+        pendingDowngrade = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: Self.disconnectGraceNanos)
+            guard let self, !Task.isCancelled else { return }
+            guard self.isRunning, self.connectedTransports.isEmpty else { return }
+            Log.info(.server, "no client after grace window — back to waiting")
+            self.onClientDisconnected?()
+        }
     }
 
     /// Creates and starts the video/input pipeline for the negotiated `config`, bound to
@@ -313,6 +341,8 @@ public final class ServerCoordinator {
         pipelineTasks.removeAll()
         currentStreamConfig = nil
         connectedTransports.removeAll()
+        pendingDowngrade?.cancel()
+        pendingDowngrade = nil
 
         await usbStack?.stop()
         await lanStack?.stop()
