@@ -50,6 +50,15 @@ public final class ServerCoordinator {
     /// callbacks from a torn-down control channel so they can't resurrect status.
     private var isRunning = false
 
+    /// Transports with a client that completed handshake + negotiation and is streaming.
+    /// The UI status is the AGGREGATE across both stacks: one connected transport means
+    /// `.connected`. A disconnect only drops the UI back to `.connecting` once this is
+    /// empty — so an idle/probe connection that lands on the other stack's listener (e.g.
+    /// the LAN control port while a USB client is live) and times out can't clobber the
+    /// live connection. A never-negotiated peer never enters this set, so its drop is a
+    /// no-op here.
+    private var connectedTransports: Set<TransportKind> = []
+
     /// Emitted on coarse lifecycle transitions: `.connecting` when the server
     /// begins listening, `.disconnected` when it stops.
     public var onStatusChange: ((ServerStatus) -> Void)?
@@ -102,6 +111,7 @@ public final class ServerCoordinator {
         for task in pipelineTasks { task.cancel() }
         pipelineTasks.removeAll()
         currentStreamConfig = nil
+        connectedTransports.removeAll()
 
         Log.info(.server, "starting servers: USB(loopback 7100-7102)\(lan != nil ? " + LAN(TLS+PIN 7110-7112)" : "")")
 
@@ -186,10 +196,10 @@ public final class ServerCoordinator {
                 try await self?.bootStreaming(config: negotiated, transport: kind)
             },
             onClientConnected: { [weak self] info, negotiated in
-                await self?.handleClientConnected(info: info, config: negotiated)
+                await self?.handleClientConnected(transport: kind, info: info, config: negotiated)
             },
             onClientDisconnected: { [weak self] in
-                await self?.handleClientDisconnected()
+                await self?.handleClientDisconnected(transport: kind)
             }
         )
         tasks.append(Task { try? await control.run() })
@@ -197,15 +207,20 @@ public final class ServerCoordinator {
 
     // MARK: - Observability hooks (MainActor; UI-only)
 
-    private func handleClientConnected(info: ClientInfo, config: DisplayConfig) {
+    private func handleClientConnected(transport kind: TransportKind, info: ClientInfo, config: DisplayConfig) {
         guard isRunning else { return }
-        Log.info(.server, "client connected: \(info.deviceModel) \(config.width)x\(config.height) @\(config.fps) codec=\(config.codec)")
+        connectedTransports.insert(kind)
+        Log.info(.server, "client connected on \(kind): \(info.deviceModel) \(config.width)x\(config.height) @\(config.fps) codec=\(config.codec)")
         onClientConnected?(info, config)
     }
 
-    private func handleClientDisconnected() {
+    private func handleClientDisconnected(transport kind: TransportKind) {
         guard isRunning else { return }
-        Log.info(.server, "client disconnected (server still listening)")
+        // A drop only surfaces to the UI once NO transport is still connected. This keeps
+        // a live client (e.g. USB) shown as connected when a probe/idle connection on the
+        // other stack's listener (e.g. LAN) times out.
+        guard connectedTransports.remove(kind) != nil, connectedTransports.isEmpty else { return }
+        Log.info(.server, "last client disconnected (\(kind); server still listening)")
         onClientDisconnected?()
     }
 
@@ -297,6 +312,7 @@ public final class ServerCoordinator {
         for task in pipelineTasks { task.cancel() }
         pipelineTasks.removeAll()
         currentStreamConfig = nil
+        connectedTransports.removeAll()
 
         await usbStack?.stop()
         await lanStack?.stop()
