@@ -29,9 +29,9 @@ public final class ServerViewModel {
     /// Connected device model (from the handshake `ClientInfo`). `nil` when idle.
     public private(set) var deviceName: String?
 
-    /// Physical link. Always "USB" — the exact bus version isn't negotiated, so the
-    /// spec's "USB 3.2" is shown as a sensible constant.
-    public var link: String = "USB"
+    /// Active link, set from the transport the connected client actually used
+    /// ("USB" or "Wi-Fi"). Defaults to "USB" while idle.
+    public private(set) var link: String = "USB"
 
     /// Whether the running server is also listening on Wi-Fi (LAN). Captured at [start]
     /// from the persisted opt-in — the same value the coordinator resolves its listener
@@ -79,8 +79,8 @@ public final class ServerViewModel {
         }
 
         // A client finished handshake/config negotiation and streaming began.
-        coordinator.onClientConnected = { [weak self] info, config in
-            self?.applyConnected(info: info, config: config)
+        coordinator.onClientConnected = { [weak self] info, config, transport in
+            self?.applyConnected(info: info, config: config, transport: transport)
         }
 
         // The active client dropped, but the server is still listening.
@@ -138,9 +138,10 @@ public final class ServerViewModel {
 
     // MARK: - State transitions
 
-    private func applyConnected(info: ClientInfo, config: DisplayConfig) {
+    private func applyConnected(info: ClientInfo, config: DisplayConfig, transport: TransportKind) {
         let model = info.deviceModel
         deviceName = (model.isEmpty || model == "Unknown") ? info.clientName : model
+        link = transport.displayName
         output = "\(config.width)×\(config.height)"
         frame = "\(config.fps) fps · \(config.codec == .hevc ? "H.265" : "H.264")"
         connectedAt = Date()

@@ -2,9 +2,19 @@ import Foundation
 
 /// Which transport a `ChannelStack` serves. A value type so it can be captured by the
 /// control channel's Sendable closures and resolved back to a stack on the MainActor.
-enum TransportKind: Sendable {
+/// Public because it is surfaced to the UI (via `ServerCoordinator.onClientConnected`) to
+/// label the active link.
+public enum TransportKind: Sendable {
     case usb
     case lan
+
+    /// Human-facing link name shown on the status popover.
+    public var displayName: String {
+        switch self {
+        case .usb: return "USB"
+        case .lan: return "Wi-Fi"
+        }
+    }
 }
 
 /// One transport's set of DeskLink channels (control/video/input), bound on a single

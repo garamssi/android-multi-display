@@ -73,8 +73,9 @@ public final class ServerCoordinator {
     public var onStatusChange: ((ServerStatus) -> Void)?
 
     /// Emitted once a client completes handshake + config negotiation and streaming
-    /// starts, carrying the negotiated device/output/frame metadata for the UI.
-    public var onClientConnected: ((ClientInfo, DisplayConfig) -> Void)?
+    /// starts, carrying the negotiated device/output/frame metadata and the transport it
+    /// connected over (so the UI can label the link USB vs Wi-Fi).
+    public var onClientConnected: ((ClientInfo, DisplayConfig, TransportKind) -> Void)?
 
     /// Emitted when the active client drops while the server keeps listening.
     public var onClientDisconnected: (() -> Void)?
@@ -226,7 +227,7 @@ public final class ServerCoordinator {
         pendingDowngrade = nil
         connectedTransports.insert(kind)
         Log.info(.server, "client connected on \(kind): \(info.deviceModel) \(config.width)x\(config.height) @\(config.fps) codec=\(config.codec); connected=\(connectedTransports)")
-        onClientConnected?(info, config)
+        onClientConnected?(info, config, kind)
     }
 
     private func handleClientDisconnected(transport kind: TransportKind) {

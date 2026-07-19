@@ -58,20 +58,12 @@ class ConnectionViewModel @Inject constructor(
 
     fun connect() {
         viewModelScope.launch {
-            val stored = settingsRepository.current()
-            // Wi-Fi (LAN) rides a shared, often-2.4GHz link that can't sustain the
-            // USB-class bitrate/fps, so a high setting just buffers and stutters. Cap the
-            // frame rate and bitrate for LAN; resolution stays native (tablet-derived) so
-            // the picture stays sharp. USB is unaffected.
-            val config = if (settingsRepository.currentTransportMode() == TransportMode.LAN) {
-                stored.copy(
-                    fps = stored.fps.coerceAtMost(LAN_MAX_FPS),
-                    bitrateKbps = stored.bitrateKbps.coerceAtMost(LAN_MAX_BITRATE_KBPS),
-                )
-            } else {
-                stored
-            }
-            connectToServer.connect(config)
+            // Wi-Fi uses the same user-selected config as USB (fps, bitrate, resolution).
+            // We intentionally do NOT cap for the worst-case 2.4GHz link: the bandwidth
+            // headroom for 60fps at full bitrate comes from connecting over 5GHz, which is
+            // the recommended Wi-Fi band. Users who are bandwidth-limited can lower fps or
+            // bitrate in Settings.
+            connectToServer.connect(settingsRepository.current())
         }
     }
 
@@ -112,13 +104,5 @@ class ConnectionViewModel @Inject constructor(
     override fun onCleared() {
         super.onCleared()
         stopDiscovery()
-    }
-
-    private companion object {
-        /** Wi-Fi frame-rate cap — smoother than 60fps on a shared/2.4GHz link. */
-        const val LAN_MAX_FPS = 30
-
-        /** Wi-Fi bitrate cap (kbps) — fits a typical 2.4GHz link without buffering. */
-        const val LAN_MAX_BITRATE_KBPS = 12_000
     }
 }
