@@ -58,12 +58,19 @@ class ConnectionViewModel @Inject constructor(
 
     fun connect() {
         viewModelScope.launch {
-            // Wi-Fi uses the same user-selected config as USB (fps, bitrate, resolution).
-            // We intentionally do NOT cap for the worst-case 2.4GHz link: the bandwidth
-            // headroom for 60fps at full bitrate comes from connecting over 5GHz, which is
-            // the recommended Wi-Fi band. Users who are bandwidth-limited can lower fps or
-            // bitrate in Settings.
-            connectToServer.connect(settingsRepository.current())
+            val stored = settingsRepository.current()
+            // Wi-Fi keeps the user-selected fps and the native (tablet) resolution, but caps
+            // the bitrate. The auto bitrate for this resolution (~40Mbps) saturates a typical
+            // Wi-Fi link, which buffers into multi-second freezes and starves the control
+            // keep-alive; a moderate cap keeps 60fps smooth with only a small hit to
+            // still-frame sharpness. USB is uncapped. On a strong 5GHz link this cap is rarely
+            // the binding limit; bandwidth-limited users can still lower fps/resolution.
+            val config = if (settingsRepository.currentTransportMode() == TransportMode.LAN) {
+                stored.copy(bitrateKbps = stored.bitrateKbps.coerceAtMost(LAN_MAX_BITRATE_KBPS))
+            } else {
+                stored
+            }
+            connectToServer.connect(config)
         }
     }
 
@@ -104,5 +111,14 @@ class ConnectionViewModel @Inject constructor(
     override fun onCleared() {
         super.onCleared()
         stopDiscovery()
+    }
+
+    private companion object {
+        /**
+         * Wi-Fi bitrate cap (kbps). Keeps 60fps smooth on a shared/typical Wi-Fi link by not
+         * chasing the resolution's full auto bitrate (~40Mbps at this panel size), which
+         * saturates the link and stalls the stream. USB is unaffected.
+         */
+        const val LAN_MAX_BITRATE_KBPS = 20_000
     }
 }
