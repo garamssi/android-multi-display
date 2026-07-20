@@ -2,8 +2,8 @@ import Foundation
 
 /// Which transport a `ChannelStack` serves. A value type so it can be captured by the
 /// control channel's Sendable closures and resolved back to a stack on the MainActor.
-/// Public because it is surfaced to the UI (via `ServerCoordinator.onClientConnected`) to
-/// label the active link.
+/// Public because it is surfaced to the UI (via `ConnectionSnapshot.connected`) to label
+/// the active link.
 public enum TransportKind: Sendable {
     case usb
     case lan

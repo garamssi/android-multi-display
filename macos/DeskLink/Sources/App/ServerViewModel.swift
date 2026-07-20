@@ -69,25 +69,26 @@ public final class ServerViewModel {
     // MARK: - Coordinator wiring
 
     private func wireCoordinator() {
-        // Coarse status changes: start() → .connecting, stop() → .disconnected.
-        coordinator.onStatusChange = { [weak self] status in
-            guard let self else { return }
-            self.status = status
-            if status != .connected {
-                self.clearConnectionMetadata()
-            }
+        // Single source of truth: the coordinator owns the connection state and emits
+        // every transition through one channel. The VM only mirrors it — no independent
+        // status writes from multiple callbacks (which previously let the UI and the
+        // coordinator disagree).
+        coordinator.onConnectionChanged = { [weak self] snapshot in
+            self?.apply(snapshot)
         }
+    }
 
-        // A client finished handshake/config negotiation and streaming began.
-        coordinator.onClientConnected = { [weak self] info, config, transport in
-            self?.applyConnected(info: info, config: config, transport: transport)
-        }
-
-        // The active client dropped, but the server is still listening.
-        coordinator.onClientDisconnected = { [weak self] in
-            guard let self else { return }
-            self.status = .connecting
-            self.clearConnectionMetadata()
+    /// Maps the coordinator's single connection state onto the observable UI fields.
+    private func apply(_ snapshot: ConnectionSnapshot) {
+        switch snapshot {
+        case .stopped:
+            status = .disconnected
+            clearConnectionMetadata()
+        case .waiting:
+            status = .connecting
+            clearConnectionMetadata()
+        case let .connected(info, config, transport):
+            applyConnected(info: info, config: config, transport: transport)
         }
     }
 
@@ -144,9 +145,13 @@ public final class ServerViewModel {
         link = transport.displayName
         output = "\(config.width)×\(config.height)"
         frame = "\(config.fps) fps · \(config.codec == .hevc ? "H.265" : "H.264")"
-        connectedAt = Date()
         status = .connected
-        startUptimeTimer()
+        // Preserve uptime across a re-negotiation (e.g. resolution change) that re-emits
+        // `.connected` for the same live session; only start the clock on a fresh connect.
+        if connectedAt == nil {
+            connectedAt = Date()
+            startUptimeTimer()
+        }
     }
 
     private func clearConnectionMetadata() {

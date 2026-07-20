@@ -6,16 +6,32 @@ public final class StartStreamingUseCase: Sendable {
     private let encoder: any VideoEncoding
     private let streamServer: any StreamServing
 
+    /// Fired when a client connects (or reconnects) its video socket and streaming
+    /// (re)starts — the authoritative "client is present and streaming" signal. Lets the
+    /// coordinator re-enter `.connected` after a video-only reconnect (e.g. the tablet
+    /// returning from the background) without needing a fresh control handshake.
+    private let onClientPresent: (@Sendable () async -> Void)?
+
+    /// Fired when the client's video stream dies on its own (a send/encode failure —
+    /// i.e. the client went away), as opposed to being cancelled by a reconnect/teardown.
+    /// This is the authoritative "client gone" signal the coordinator uses to end a
+    /// session, instead of the control-channel keep-alive heartbeat.
+    private let onClientGone: (@Sendable () async -> Void)?
+
     public init(
         displayManager: any VirtualDisplayManaging,
         screenCapturer: any ScreenCapturing,
         encoder: any VideoEncoding,
-        streamServer: any StreamServing
+        streamServer: any StreamServing,
+        onClientPresent: (@Sendable () async -> Void)? = nil,
+        onClientGone: (@Sendable () async -> Void)? = nil
     ) {
         self.displayManager = displayManager
         self.screenCapturer = screenCapturer
         self.encoder = encoder
         self.streamServer = streamServer
+        self.onClientPresent = onClientPresent
+        self.onClientGone = onClientGone
     }
 
     /// Runs the video streaming loop, one connected client at a time.
@@ -45,13 +61,23 @@ public final class StartStreamingUseCase: Sendable {
             streamTask?.cancel()
             await streamTask?.value
             await screenCapturer.stopCapture()
+            // A client is (re)connected and about to stream — surface it so the UI can
+            // (re)enter connected even for a video-only reconnect with no new handshake.
+            await onClientPresent?()
             streamTask = Task { [self] in
                 do {
                     try await streamToClient(config: config, displayID: displayID)
-                    Log.info(.stream, "stream: capture loop ended (client gone)")
+                    // Frames ended without error — this happens on an intentional
+                    // capture stop (teardown/reconnect), not a client-gone event.
+                    Log.info(.stream, "stream: capture loop ended")
+                } catch is CancellationError {
+                    // Superseded by a new connection or a teardown — not a client loss.
                 } catch {
+                    // A send/encode failure means the client's video socket is gone.
+                    // This — not the control keep-alive — is what ends a session.
                     Log.error(.stream, "stream: streamToClient error: \(error)")
                     await screenCapturer.stopCapture()
+                    await onClientGone?()
                 }
             }
         }
@@ -89,11 +115,5 @@ public final class StartStreamingUseCase: Sendable {
                 Log.debug(.stream, "stream: sent VIDEO_FRAME #\(frameCount) (\(encoded.data.count) bytes, key=\(encoded.isKeyframe))")
             }
         }
-    }
-
-    public func stop() async {
-        await screenCapturer.stopCapture()
-        await streamServer.stop()
-        await displayManager.destroyDisplay()
     }
 }

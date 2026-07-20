@@ -44,43 +44,47 @@ public final class ServerCoordinator {
     /// Prevents overlapping boot/reboot sequences.
     private var isBooting = false
 
-    /// Pending "back to waiting" downgrade, debounced so a brief control-channel blip
-    /// that reconnects and re-negotiates within the grace window doesn't flap the UI.
-    private var pendingDowngrade: Task<Void, Never>?
+    // MARK: - Connection state (single source of truth)
 
-    /// Grace period before a last-client drop downgrades the UI to `.connecting`. Long
-    /// enough to absorb a transient control reconnect, short enough to reflect a real
-    /// unplug promptly.
-    private static let disconnectGraceNanos: UInt64 = 3_000_000_000
+    /// The one place the connection state lives. Every UI-visible transition goes through
+    /// `setConnection`, which emits `onConnectionChanged`. Nothing else writes UI state.
+    private var connection: ConnectionSnapshot = .stopped {
+        didSet { onConnectionChanged?(connection) }
+    }
 
-    // MARK: - Observability (UI wiring only — no effect on streaming behaviour)
+    /// Observed by the UI (ServerViewModel). Fired on every connection-state transition.
+    public var onConnectionChanged: ((ConnectionSnapshot) -> Void)?
 
-    /// True between a successful `start()` and `stop()`. Guards late disconnect
-    /// callbacks from a torn-down control channel so they can't resurrect status.
-    private var isRunning = false
-
-    /// Transports with a client that completed handshake + negotiation and is streaming.
-    /// The UI status is the AGGREGATE across both stacks: one connected transport means
-    /// `.connected`. A disconnect only drops the UI back to `.connecting` once this is
-    /// empty — so an idle/probe connection that lands on the other stack's listener (e.g.
-    /// the LAN control port while a USB client is live) and times out can't clobber the
-    /// live connection. A never-negotiated peer never enters this set, so its drop is a
-    /// no-op here.
+    /// Transports whose client completed negotiation and has a live video session. The
+    /// state is the AGGREGATE across both stacks: any connected transport ⇒ `.connected`;
+    /// it returns to `.waiting` only once this is empty. Used so a probe/idle connection
+    /// on the other stack's listener can't clobber a live client.
     private var connectedTransports: Set<TransportKind> = []
 
-    /// Emitted on coarse lifecycle transitions: `.connecting` when the server
-    /// begins listening, `.disconnected` when it stops.
-    public var onStatusChange: ((ServerStatus) -> Void)?
+    /// The most recently negotiated client session (device info + config + transport).
+    /// Kept so a video-only reconnect (tablet returning from the background, no fresh
+    /// handshake) can re-enter `.connected` with the same metadata. Cleared on stop().
+    private var activeSession: (info: ClientInfo, config: DisplayConfig, kind: TransportKind)?
 
-    /// Emitted once a client completes handshake + config negotiation and streaming
-    /// starts, carrying the negotiated device/output/frame metadata and the transport it
-    /// connected over (so the UI can label the link USB vs Wi-Fi).
-    public var onClientConnected: ((ClientInfo, DisplayConfig, TransportKind) -> Void)?
+    /// Monotonic id for the active video pipeline. Each `bootStreaming` bumps it and hands
+    /// its value to that pipeline's "client gone" callback, so a stale callback from a
+    /// pipeline that was already torn down by a reconnect/rebuild is ignored.
+    private var streamGeneration = 0
 
-    /// Emitted when the active client drops while the server keeps listening.
-    public var onClientDisconnected: (() -> Void)?
+    /// True while the server is running (listening). Derived from the single state so
+    /// there is no separate flag to fall out of sync.
+    private var isRunning: Bool {
+        if case .stopped = connection { return false }
+        return true
+    }
 
     public init() {}
+
+    /// Applies a connection-state transition (single writer). Idempotent for the
+    /// caller's purposes; the UI handler tolerates repeats.
+    private func setConnection(_ new: ConnectionSnapshot) {
+        connection = new
+    }
 
     /// Sets up ADB forwarding and starts all three channels **listening** so the
     /// client can connect to any of them without a bind race. The video pipeline
@@ -122,13 +126,9 @@ public final class ServerCoordinator {
         pipelineTasks.removeAll()
         currentStreamConfig = nil
         connectedTransports.removeAll()
-        pendingDowngrade?.cancel()
-        pendingDowngrade = nil
+        activeSession = nil
 
         Log.info(.server, "starting servers: USB(loopback 7100-7102)\(lan != nil ? " + LAN(TLS+PIN 7110-7112)" : "")")
-
-        // Observability: server is now coming up and listening for a client.
-        onStatusChange?(.connecting)
 
         // Request Accessibility up front so injected touches actually take effect and
         // the app is listed in System Settings > Privacy & Security > Accessibility.
@@ -175,19 +175,19 @@ public final class ServerCoordinator {
             try? await adbManager.removePortForwarding()
             usbStack = nil
             lanStack = nil
-            isRunning = false
-            onStatusChange?(.disconnected)
+            setConnection(.stopped)
             throw error
         }
 
-        // All sockets are bound and listening — the server is officially up.
-        isRunning = true
+        // All sockets are bound and listening — the server is officially up and waiting
+        // for a client. `isRunning` derives from this, so there is no separate flag.
+        setConnection(.waiting)
 
         // One control channel per stack. On successful negotiation, ControlChannelUseCase
         // invokes onStreamStart with the negotiated config BEFORE sending START_STREAM, so
         // the virtual display and encoder exist by the time the client connects to the
-        // video channel. The onClientConnected/onClientDisconnected hooks are pure
-        // observability (device model, resolution, fps, codec) with no effect on streaming.
+        // video channel. Negotiation completion moves the state to `.connected`; the
+        // control keep-alive is decoupled from state (see startControlChannel).
         startControlChannel(for: usb)
         if let lan { startControlChannel(for: lan) }
     }
@@ -210,47 +210,51 @@ public final class ServerCoordinator {
             onClientConnected: { [weak self] info, negotiated in
                 await self?.handleClientConnected(transport: kind, info: info, config: negotiated)
             },
-            onClientDisconnected: { [weak self] in
-                await self?.handleClientDisconnected(transport: kind)
+            onClientDisconnected: {
+                // The control keep-alive is intentionally DECOUPLED from UI state. Its 3s
+                // heartbeat false-expires during the connect burst (heavy decoder init on
+                // the tablet) while video keeps flowing, so it must not end the session.
+                // Session end is driven by the video stream dying (see handleStreamEnded).
+                // The keep-alive still loops to accept the next client on this stack.
+                Log.info(.server, "control keep-alive lapsed on \(kind) (UI unaffected; video liveness drives state)")
             }
         )
         tasks.append(Task { try? await control.run() })
     }
 
-    // MARK: - Observability hooks (MainActor; UI-only)
+    // MARK: - Connection-state transitions (MainActor)
 
+    /// A client finished handshake + config negotiation on `kind`: record the session and
+    /// enter `.connected`. This is the initial-connect trigger; a later video-only
+    /// reconnect re-enters via `handleClientPresent` using the stored session.
     private func handleClientConnected(transport kind: TransportKind, info: ClientInfo, config: DisplayConfig) {
         guard isRunning else { return }
-        // A (re)connection cancels any pending downgrade so a quick reconnect never flaps
-        // the UI back to waiting.
-        pendingDowngrade?.cancel()
-        pendingDowngrade = nil
+        activeSession = (info, config, kind)
         connectedTransports.insert(kind)
         Log.info(.server, "client connected on \(kind): \(info.deviceModel) \(config.width)x\(config.height) @\(config.fps) codec=\(config.codec); connected=\(connectedTransports)")
-        onClientConnected?(info, config, kind)
+        setConnection(.connected(info, config, kind))
     }
 
-    private func handleClientDisconnected(transport kind: TransportKind) {
+    /// The video pipeline for `kind` (re)established a client connection. Re-enters
+    /// `.connected` with the stored session — this is what heals a video-only reconnect
+    /// (e.g. the tablet returning from the background) that has no new handshake.
+    /// `generation` ignores a stale callback from a pipeline replaced by a reconnect.
+    private func handleClientPresent(transport kind: TransportKind, generation: Int) {
+        guard generation == streamGeneration, isRunning, let session = activeSession else { return }
+        connectedTransports.insert(kind)
+        setConnection(.connected(session.info, session.config, session.kind))
+    }
+
+    /// The video stream for `kind` died (client gone). Ends the session for that
+    /// transport, returning to `.waiting` once no transport is streaming. `generation`
+    /// guards against a stale callback from a pipeline already replaced by a reconnect.
+    private func handleStreamEnded(transport kind: TransportKind, generation: Int) {
+        guard generation == streamGeneration else { return }
         guard isRunning else { return }
-        // Ignore drops from a peer that never negotiated (e.g. a probe/idle connection on
-        // the other stack's listener): it was never in the set, so it can't affect a live
-        // client's UI state.
-        guard connectedTransports.remove(kind) != nil else {
-            Log.info(.server, "ignoring drop on \(kind): no negotiated client there (connected=\(connectedTransports))")
-            return
-        }
-        Log.info(.server, "client dropped on \(kind); remaining=\(connectedTransports)")
-        // Only surface to the UI once NO transport is still connected, and only after a
-        // grace window (a control blip usually reconnects and re-negotiates before then).
+        guard connectedTransports.remove(kind) != nil else { return }
+        Log.info(.server, "video session ended on \(kind); remaining=\(connectedTransports)")
         guard connectedTransports.isEmpty else { return }
-        pendingDowngrade?.cancel()
-        pendingDowngrade = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: Self.disconnectGraceNanos)
-            guard let self, !Task.isCancelled else { return }
-            guard self.isRunning, self.connectedTransports.isEmpty else { return }
-            Log.info(.server, "no client after grace window — back to waiting")
-            self.onClientDisconnected?()
-        }
+        setConnection(.waiting)
     }
 
     /// Creates and starts the video/input pipeline for the negotiated `config`, bound to
@@ -269,6 +273,14 @@ public final class ServerCoordinator {
         defer { isBooting = false }
 
         guard let stack = (kind == .usb ? usbStack : lanStack) else { return }
+
+        // Bump the pipeline generation FIRST, before tearing the old pipeline down. The
+        // old pipeline's teardown makes its streamToClient send fail with a (non-cancel)
+        // error, which fires onClientGone; stamping the new generation now ensures that
+        // stale callback is filtered by handleStreamEnded and can't flip a live,
+        // re-negotiating session back to .waiting (which would also reset uptime).
+        streamGeneration += 1
+        let generation = streamGeneration
 
         let previous = currentStreamConfig
         let isReconnect = previous != nil
@@ -319,22 +331,30 @@ public final class ServerCoordinator {
         let receiveInput = ReceiveInputUseCase(receiver: stack.inputServer, injector: injector, displayID: displayID)
         pipelineTasks.append(Task { try? await receiveInput.run() })
 
-        // Video channel: capture → encode → stream.
+        // Video channel: capture → encode → stream. `generation` (bumped at the top of
+        // this boot) tags both liveness callbacks so a stale one from a superseded
+        // pipeline is ignored. onClientPresent re-enters .connected on a (re)connection;
+        // onClientGone ends the session when the client's video socket dies for good.
         let streaming = StartStreamingUseCase(
             displayManager: displayManager,
             screenCapturer: screenCapturer,
             encoder: encoder,
-            streamServer: stack.videoServer
+            streamServer: stack.videoServer,
+            onClientPresent: { [weak self] in
+                await self?.handleClientPresent(transport: kind, generation: generation)
+            },
+            onClientGone: { [weak self] in
+                await self?.handleStreamEnded(transport: kind, generation: generation)
+            }
         )
         pipelineTasks.append(Task { try? await streaming.execute(config: config, displayID: displayID) })
     }
 
     /// Stops all channels and tears down the virtual display and ADB forwarding.
     public func stop() async {
-        // Flip first so any in-flight disconnect callback from the tearing-down
-        // control channel is suppressed (see handleClientDisconnected).
-        isRunning = false
-        onStatusChange?(.disconnected)
+        // Flip to .stopped first so `isRunning` is false and any in-flight callback from
+        // a tearing-down control channel or video pipeline is suppressed.
+        setConnection(.stopped)
 
         for task in tasks { task.cancel() }
         tasks.removeAll()
@@ -342,8 +362,7 @@ public final class ServerCoordinator {
         pipelineTasks.removeAll()
         currentStreamConfig = nil
         connectedTransports.removeAll()
-        pendingDowngrade?.cancel()
-        pendingDowngrade = nil
+        activeSession = nil
 
         await usbStack?.stop()
         await lanStack?.stop()
