@@ -92,6 +92,14 @@ struct StatusMenuView: View {
 
     // MARK: - Header
 
+    /// App version shown in the header, read from the bundle's CFBundleShortVersionString
+    /// (DeskLink-Info.plist) — the single source of truth — instead of a hardcoded literal
+    /// that drifts out of sync with the actual build.
+    private var appVersionLabel: String {
+        (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String)
+            .map { "v\($0)" } ?? "—"
+    }
+
     private var headerRow: some View {
         HStack(spacing: 11) {
             appGlyph
@@ -100,7 +108,7 @@ struct StatusMenuView: View {
                 Text("DeskLink Server")
                     .font(.plexSans(size: 15, weight: .semibold))
                     .foregroundStyle(DesignTokens.textPrimary)
-                Text("v1.4.0")
+                Text(appVersionLabel)
                     .font(.plexMono(size: 11))
                     .foregroundStyle(DesignTokens.textTertiary)
             }
