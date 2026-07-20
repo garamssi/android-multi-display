@@ -156,10 +156,7 @@ fun ConnectionScreen(
         }
     }
 
-    val isBusy = state is ConnectionState.Connecting ||
-        state is ConnectionState.Handshaking ||
-        state is ConnectionState.Negotiating ||
-        state is ConnectionState.Reconnecting
+    val isBusy = state.isInProgress
     val isError = state is ConnectionState.Error
 
     val pairingTargetNow = pairingTarget

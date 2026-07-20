@@ -59,22 +59,21 @@ class DisplayViewModel @Inject constructor(
         viewModelScope.launch {
             var wasConnected = false
             connectionState.collect { state ->
-                when (state) {
-                    is ConnectionState.Connected -> {
+                when {
+                    state.isConnected -> {
                         // Only a *re*-connect needs a restart; the initial connect is
                         // driven by onSurfaceAvailable().
                         if (wasConnected && started) restartVideoPipeline()
                         wasConnected = true
                     }
 
-                    is ConnectionState.Disconnected, is ConnectionState.Error ->
-                        wasConnected = false
+                    // Terminal (idle/error): the session is over, so a following Connected
+                    // is a fresh connect rather than a reconnect.
+                    state.isTerminal -> wasConnected = false
 
-                    else -> {
-                        // Transient (Connecting/Handshaking/Negotiating/Reconnecting):
-                        // keep wasConnected so the following Connected is seen as a
-                        // reconnect.
-                    }
+                    // Transient (in-progress): keep wasConnected so the following
+                    // Connected is recognized as a reconnect.
+                    else -> {}
                 }
             }
         }

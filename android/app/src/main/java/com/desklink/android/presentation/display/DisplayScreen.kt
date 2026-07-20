@@ -62,7 +62,6 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import com.desklink.android.data.codec.VsyncRenderer
-import com.desklink.android.domain.model.ConnectionState
 import com.desklink.android.presentation.components.AppGlyph
 import com.desklink.android.presentation.components.GlassCircleButton
 import com.desklink.android.presentation.components.IndeterminateBar
@@ -140,8 +139,7 @@ fun DisplayScreen(
     }
 
     LaunchedEffect(connectionState) {
-        val state = connectionState
-        if (state is ConnectionState.Error || state is ConnectionState.Disconnected) {
+        if (connectionState.isTerminal) {
             leaveToConnect()
         }
     }
@@ -448,10 +446,7 @@ fun DisplayScreen(
             onDisconnect = { leaveToConnect() },
         )
 
-        val reconnecting = connectionState is ConnectionState.Reconnecting ||
-            connectionState is ConnectionState.Connecting ||
-            connectionState is ConnectionState.Handshaking ||
-            connectionState is ConnectionState.Negotiating
+        val reconnecting = connectionState.isInProgress
         if (reconnecting && !exiting) {
             ReconnectingOverlay(modifier = Modifier.fillMaxSize())
         }

@@ -159,7 +159,7 @@ class ConnectionManagerImpl @Inject constructor(
                 val request = handshakeClient.buildHandshakeRequest(config.nativeWidth, config.nativeHeight)
                 controlClient.send(MessageType.HANDSHAKE_REQUEST, request)
 
-                _connectionState.value = ConnectionState.Handshaking("Waiting for server...")
+                _connectionState.value = ConnectionState.Handshaking
 
                 // A-H1: bound the whole handshake exchange by HANDSHAKE_TIMEOUT.
                 withTimeout(ProtocolConstants.HANDSHAKE_TIMEOUT) {
