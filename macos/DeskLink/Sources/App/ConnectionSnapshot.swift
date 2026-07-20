@@ -14,7 +14,7 @@ import Foundation
 /// timer that false-expired during the connect burst (heavy decoder init on the tablet),
 /// which flipped a healthy, still-streaming session back to "waiting" and wiped the live
 /// stats. Video liveness is the real signal that a client is present and working.
-enum ConnectionSnapshot: Sendable {
+public enum ConnectionSnapshot: Sendable {
     /// Server not running (no listeners).
     case stopped
     /// Server running and listening, but no client session is active.
