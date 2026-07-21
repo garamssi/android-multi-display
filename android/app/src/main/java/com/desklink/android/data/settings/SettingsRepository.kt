@@ -207,9 +207,11 @@ class SettingsRepository @Inject constructor(
         /** USB is the default and only secure transport today; LAN is opt-in. */
         val DEFAULT_TRANSPORT_MODE = TransportMode.USB
 
-        /** Default controls-handle position: horizontally centered, near the top. */
-        const val DEFAULT_CTRL_HANDLE_X = 0.5f
-        const val DEFAULT_CTRL_HANDLE_Y = 0.04f
+        /** Default controls-handle position: right edge, vertically centered. Kept off the
+         *  top edge so it never hides behind the status bar / camera cutout, and away from
+         *  the bottom gesture-nav area — a spot that is clearly visible on first launch. */
+        const val DEFAULT_CTRL_HANDLE_X = 0.94f
+        const val DEFAULT_CTRL_HANDLE_Y = 0.5f
 
         private const val KEY_WIDTH = "width"
         private const val KEY_HEIGHT = "height"

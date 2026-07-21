@@ -485,8 +485,10 @@ private fun ReconnectingOverlay(modifier: Modifier = Modifier) {
 /** Idle time before the always-visible controls handle dims. */
 private const val CONTROLS_IDLE_DIM_MS = 4_000L
 
-/** Opacity the controls handle fades to while idle (brightens on touch / when expanded). */
-private const val CONTROLS_DIM_ALPHA = 0.4f
+/** Opacity the controls handle fades to while idle (brightens on touch / when expanded).
+ *  Kept high enough that the dark-glass handle stays clearly visible over bright or dark
+ *  mirrored content — it dims to hint idleness, not to disappear. */
+private const val CONTROLS_DIM_ALPHA = 0.65f
 
 /** Diameter of the draggable controls handle (matches GlassCircleButton). */
 private val HANDLE_SIZE = 48.dp
