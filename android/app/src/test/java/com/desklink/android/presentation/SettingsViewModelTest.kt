@@ -160,6 +160,26 @@ class SettingsViewModelTest {
     }
 
     @Test
+    fun `touch input defaults to on`() {
+        val vm = viewModel()
+        assertTrue(vm.uiState.value.touchInputEnabled)
+        assertTrue(SettingsRepository.DEFAULT_TOUCH_INPUT_ENABLED)
+        assertTrue(repository().currentTouchInputEnabled())
+    }
+
+    @Test
+    fun `setTouchInputEnabled toggles and persists across restart`() {
+        val store = FakeSettingsStore()
+        val repo = repository(store = store)
+
+        repo.setTouchInputEnabled(false)
+        assertFalse(repo.currentTouchInputEnabled())
+
+        // New repository, same store == app restart: the choice is restored.
+        assertFalse(repository(store = store).currentTouchInputEnabled())
+    }
+
+    @Test
     fun `transport defaults to USB with no manual host`() {
         val vm = viewModel()
         assertEquals(TransportMode.USB, vm.uiState.value.transportMode)

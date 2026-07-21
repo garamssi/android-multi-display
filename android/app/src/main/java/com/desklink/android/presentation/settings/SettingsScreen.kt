@@ -170,6 +170,7 @@ fun SettingsScreen(
                                     onSetCodec = viewModel::setCodec,
                                     onSetScrollSensitivity = viewModel::setScrollSensitivity,
                                     onSetNaturalScroll = viewModel::setNaturalScroll,
+                                    onSetTouchInput = viewModel::setTouchInputEnabled,
                                 )
                             },
                         )
@@ -205,6 +206,7 @@ fun SettingsScreen(
                                         onSetCodec = viewModel::setCodec,
                                         onSetScrollSensitivity = viewModel::setScrollSensitivity,
                                         onSetNaturalScroll = viewModel::setNaturalScroll,
+                                        onSetTouchInput = viewModel::setTouchInputEnabled,
                                     )
                                 }
                             },
@@ -395,6 +397,7 @@ private fun StreamColumn(
     onSetCodec: (DisplayConfig.Codec) -> Unit,
     onSetScrollSensitivity: (Float) -> Unit,
     onSetNaturalScroll: (Boolean) -> Unit,
+    onSetTouchInput: (Boolean) -> Unit,
 ) {
     Column(
         modifier = modifier,
@@ -478,6 +481,19 @@ private fun StreamColumn(
                 selected = SettingsUiState.SCROLL_DIRECTION_OPTIONS
                     .first { it.natural == state.naturalScroll },
                 onSelect = { onSetNaturalScroll(it.natural) },
+            ) { option, isSelected ->
+                SegmentLabel(text = option.label, isSelected = isSelected)
+            }
+        }
+
+        Column {
+            SectionLabel("Touch input")
+            Spacer(Modifier.height(14.dp))
+            SegmentedControl(
+                options = SettingsUiState.TOUCH_INPUT_OPTIONS,
+                selected = SettingsUiState.TOUCH_INPUT_OPTIONS
+                    .first { it.enabled == state.touchInputEnabled },
+                onSelect = { onSetTouchInput(it.enabled) },
             ) { option, isSelected ->
                 SegmentLabel(text = option.label, isSelected = isSelected)
             }

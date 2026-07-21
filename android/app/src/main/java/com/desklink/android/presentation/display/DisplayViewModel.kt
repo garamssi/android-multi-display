@@ -134,6 +134,7 @@ class DisplayViewModel @Inject constructor(
      *  sensitivity and direction preference (applied here so the Mac injects 1:1).
      *  Reversed flips the delta sign; the same path covers live scroll and fling. */
     fun sendScroll(deltaX: Float, deltaY: Float) {
+        if (!touchInputEnabled()) return
         val sensitivity = settingsRepository.currentScrollSensitivity()
         val direction = if (settingsRepository.currentNaturalScroll()) 1f else -1f
         val scale = sensitivity * direction
@@ -149,6 +150,7 @@ class DisplayViewModel @Inject constructor(
      * let the right-click overtake the left release.
      */
     fun sendLongPressRightClick(x: Float, y: Float) {
+        if (!touchInputEnabled()) return
         viewModelScope.launch {
             sendTouchUseCase.send(cancelTouchEvent(x, y))
             sendTouchUseCase.sendRightClick(x, y)
@@ -162,6 +164,7 @@ class DisplayViewModel @Inject constructor(
      * pressed. [x]/[y] are the last known normalized position of the primary pointer.
      */
     fun cancelTouch(x: Float, y: Float) {
+        if (!touchInputEnabled()) return
         viewModelScope.launch {
             sendTouchUseCase.send(cancelTouchEvent(x, y))
         }
@@ -178,8 +181,17 @@ class DisplayViewModel @Inject constructor(
     fun sendPointerUp(x: Float, y: Float) = sendPrimary(TouchEvent.Action.UP, x, y)
 
     private fun sendPrimary(action: TouchEvent.Action, x: Float, y: Float) {
+        if (!touchInputEnabled()) return
         viewModelScope.launch { sendTouchUseCase.send(primaryTouch(action, x, y)) }
     }
+
+    /**
+     * The single gate for all pointer/scroll forwarding. When the user turns touch
+     * input off in Settings, the mirror keeps rendering but no input events leave the
+     * tablet, so it is view-only. Local-only gestures (floating handle, pinch-zoom,
+     * pan) never reach these senders, so they keep working regardless.
+     */
+    private fun touchInputEnabled(): Boolean = settingsRepository.currentTouchInputEnabled()
 
     /** A single primary-pointer (id 0) touch of [action] at a normalized position. */
     private fun primaryTouch(action: TouchEvent.Action, x: Float, y: Float) = TouchEvent(

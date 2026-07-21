@@ -45,16 +45,23 @@ class SettingsViewModel @Inject constructor(
             settingsRepository.manualHost,
         ) { config, sensitivity, naturalScroll, transportMode, manualHost ->
             config.toUiState(sensitivity, naturalScroll, transportMode, manualHost)
-        }.stateIn(
-            scope = viewModelScope,
-            started = SharingStarted.WhileSubscribed(5_000),
-            initialValue = settingsRepository.current().toUiState(
-                settingsRepository.currentScrollSensitivity(),
-                settingsRepository.currentNaturalScroll(),
-                settingsRepository.currentTransportMode(),
-                settingsRepository.currentManualHost(),
-            ),
-        )
+        }
+            // combine() is typed only up to 5 flows; touchInputEnabled is folded in as a
+            // sixth source via a nested combine + copy rather than dropping to the untyped
+            // vararg overload.
+            .combine(settingsRepository.touchInputEnabled) { state, touchInputEnabled ->
+                state.copy(touchInputEnabled = touchInputEnabled)
+            }
+            .stateIn(
+                scope = viewModelScope,
+                started = SharingStarted.WhileSubscribed(5_000),
+                initialValue = settingsRepository.current().toUiState(
+                    settingsRepository.currentScrollSensitivity(),
+                    settingsRepository.currentNaturalScroll(),
+                    settingsRepository.currentTransportMode(),
+                    settingsRepository.currentManualHost(),
+                ).copy(touchInputEnabled = settingsRepository.currentTouchInputEnabled()),
+            )
 
     fun setResolution(width: Int, height: Int) = settingsRepository.setResolution(width, height)
 
@@ -71,6 +78,8 @@ class SettingsViewModel @Inject constructor(
     fun setScrollSensitivity(value: Float) = settingsRepository.setScrollSensitivity(value)
 
     fun setNaturalScroll(enabled: Boolean) = settingsRepository.setNaturalScroll(enabled)
+
+    fun setTouchInputEnabled(enabled: Boolean) = settingsRepository.setTouchInputEnabled(enabled)
 
     fun setTransportMode(mode: TransportMode) = settingsRepository.setTransportMode(mode)
 
@@ -135,6 +144,7 @@ data class SettingsUiState(
     val naturalScroll: Boolean = true,
     val transportMode: TransportMode = TransportMode.USB,
     val manualHost: String = "",
+    val touchInputEnabled: Boolean = true,
 ) {
     /** True when the current streaming resolution equals the device's native size. */
     val isNativeSelected: Boolean get() = width == nativeWidth && height == nativeHeight
@@ -168,6 +178,13 @@ data class SettingsUiState(
             ScrollDirectionOption(natural = true, label = "Natural"),
             ScrollDirectionOption(natural = false, label = "Reversed"),
         )
+
+        /** Touch input options. On forwards pointer/scroll events to the Mac (current
+         *  behavior); Off makes the mirror view-only (rendering continues). */
+        val TOUCH_INPUT_OPTIONS = listOf(
+            TouchInputOption(enabled = true, label = "On"),
+            TouchInputOption(enabled = false, label = "Off"),
+        )
     }
 }
 
@@ -179,3 +196,6 @@ data class ScrollSpeedOption(val sensitivity: Float, val label: String)
 
 /** A selectable scroll-direction preset with a human label. */
 data class ScrollDirectionOption(val natural: Boolean, val label: String)
+
+/** A selectable touch-input preset with a human label. */
+data class TouchInputOption(val enabled: Boolean, val label: String)

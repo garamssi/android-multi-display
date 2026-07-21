@@ -69,6 +69,17 @@ class SettingsRepository @Inject constructor(
     val naturalScroll: StateFlow<Boolean> = _naturalScroll.asStateFlow()
 
     /**
+     * Whether touch input is forwarded to the Mac. A local input preference (like
+     * [scrollSensitivity]/[naturalScroll]), NOT part of the negotiated video
+     * [DisplayConfig] or wire protocol: when `false` the tablet still renders the
+     * mirror but stops sending pointer/scroll events, so the mirror is view-only.
+     * On by default (current behavior).
+     */
+    private val _touchInputEnabled =
+        MutableStateFlow(store.getBoolean(KEY_TOUCH_INPUT_ENABLED, DEFAULT_TOUCH_INPUT_ENABLED))
+    val touchInputEnabled: StateFlow<Boolean> = _touchInputEnabled.asStateFlow()
+
+    /**
      * How the client reaches the Mac ([TransportMode.USB] by default). Read by the
      * transport layer at connect time, so changing it in Settings then reconnecting
      * switches the dial target. LAN is plaintext/dev-only in this phase (see
@@ -132,6 +143,11 @@ class SettingsRepository @Inject constructor(
         store.putBoolean(KEY_NATURAL_SCROLL, enabled)
     }
 
+    fun setTouchInputEnabled(enabled: Boolean) {
+        _touchInputEnabled.update { enabled }
+        store.putBoolean(KEY_TOUCH_INPUT_ENABLED, enabled)
+    }
+
     fun setTransportMode(mode: TransportMode) {
         _transportMode.update { mode }
         store.putString(KEY_TRANSPORT_MODE, mode.name)
@@ -156,6 +172,8 @@ class SettingsRepository @Inject constructor(
     fun currentScrollSensitivity(): Float = _scrollSensitivity.value
 
     fun currentNaturalScroll(): Boolean = _naturalScroll.value
+
+    fun currentTouchInputEnabled(): Boolean = _touchInputEnabled.value
 
     fun currentTransportMode(): TransportMode = _transportMode.value
 
@@ -193,6 +211,8 @@ class SettingsRepository @Inject constructor(
         const val DEFAULT_SCROLL_SENSITIVITY = 3.0f
         /** Natural scrolling on by default (macOS default, current behavior). */
         const val DEFAULT_NATURAL_SCROLL = true
+        /** Touch input forwarded by default (current behavior). */
+        const val DEFAULT_TOUCH_INPUT_ENABLED = true
         /** USB is the default and only secure transport today; LAN is opt-in. */
         val DEFAULT_TRANSPORT_MODE = TransportMode.USB
 
@@ -204,6 +224,7 @@ class SettingsRepository @Inject constructor(
         private const val KEY_CODEC = "codec"
         private const val KEY_SCROLL_SENSITIVITY = "scrollSensitivity"
         private const val KEY_NATURAL_SCROLL = "naturalScroll"
+        private const val KEY_TOUCH_INPUT_ENABLED = "touchInputEnabled"
         private const val KEY_TRANSPORT_MODE = "transportMode"
         private const val KEY_MANUAL_HOST = "manualHost"
         private const val KEY_PAIRING_PIN = "pairingPin"
