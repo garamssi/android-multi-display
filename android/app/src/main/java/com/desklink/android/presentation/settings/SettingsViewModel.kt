@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.desklink.android.data.settings.SettingsRepository
 import com.desklink.android.domain.model.DisplayConfig
+import com.desklink.android.domain.model.DisplayRotation
 import com.desklink.android.domain.model.TransportMode
 import com.desklink.android.domain.transport.DiscoveredServer
 import com.desklink.android.domain.transport.PeerDiscovery
@@ -52,6 +53,9 @@ class SettingsViewModel @Inject constructor(
             .combine(settingsRepository.touchInputEnabled) { state, touchInputEnabled ->
                 state.copy(touchInputEnabled = touchInputEnabled)
             }
+            .combine(settingsRepository.displayRotation) { state, rotation ->
+                state.copy(rotation = rotation)
+            }
             .stateIn(
                 scope = viewModelScope,
                 started = SharingStarted.WhileSubscribed(5_000),
@@ -60,7 +64,10 @@ class SettingsViewModel @Inject constructor(
                     settingsRepository.currentNaturalScroll(),
                     settingsRepository.currentTransportMode(),
                     settingsRepository.currentManualHost(),
-                ).copy(touchInputEnabled = settingsRepository.currentTouchInputEnabled()),
+                ).copy(
+                    touchInputEnabled = settingsRepository.currentTouchInputEnabled(),
+                    rotation = settingsRepository.currentDisplayRotation(),
+                ),
             )
 
     fun setResolution(width: Int, height: Int) = settingsRepository.setResolution(width, height)
@@ -80,6 +87,8 @@ class SettingsViewModel @Inject constructor(
     fun setNaturalScroll(enabled: Boolean) = settingsRepository.setNaturalScroll(enabled)
 
     fun setTouchInputEnabled(enabled: Boolean) = settingsRepository.setTouchInputEnabled(enabled)
+
+    fun setDisplayRotation(rotation: DisplayRotation) = settingsRepository.setDisplayRotation(rotation)
 
     fun setTransportMode(mode: TransportMode) = settingsRepository.setTransportMode(mode)
 
@@ -145,6 +154,7 @@ data class SettingsUiState(
     val transportMode: TransportMode = TransportMode.USB,
     val manualHost: String = "",
     val touchInputEnabled: Boolean = true,
+    val rotation: DisplayRotation = DisplayRotation.ROTATION_0,
 ) {
     /** True when the current streaming resolution equals the device's native size. */
     val isNativeSelected: Boolean get() = width == nativeWidth && height == nativeHeight
@@ -184,6 +194,15 @@ data class SettingsUiState(
         val TOUCH_INPUT_OPTIONS = listOf(
             TouchInputOption(enabled = true, label = "On"),
             TouchInputOption(enabled = false, label = "Off"),
+        )
+
+        /** Screen rotation options (0/90/180/270). Portrait (90/270) changes the geometry
+         *  requested from the Mac; the 180-flip part is applied on the tablet. */
+        val ROTATION_OPTIONS = listOf(
+            DisplayRotation.ROTATION_0,
+            DisplayRotation.ROTATION_90,
+            DisplayRotation.ROTATION_180,
+            DisplayRotation.ROTATION_270,
         )
     }
 }

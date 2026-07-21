@@ -2,6 +2,7 @@ package com.desklink.android.presentation.display
 
 import android.annotation.SuppressLint
 import android.app.Activity
+import android.content.pm.ActivityInfo
 import android.os.SystemClock
 import android.view.MotionEvent
 import android.view.SurfaceHolder
@@ -93,6 +94,12 @@ fun DisplayScreen(
     val longPressDetector = remember { LongPressDetector() }
     val gestureScope = rememberCoroutineScope()
 
+    // The session rotation (set in Settings before connecting; constant for the session).
+    // isPortrait locks the tablet orientation to match the Mac-built geometry; isFlipped
+    // applies a lossless 180 turn on the tablet (view + touch inversion), never sent to Mac.
+    val rotation = remember { viewModel.displayRotation() }
+    val flipped = rotation.isFlipped
+
     // Local pinch-zoom of the mirror view (client-side; Mac not involved).
     val zoom = remember { ViewZoom() }
     // The transformed SurfaceView, so the zoom transform can be applied to it directly.
@@ -149,6 +156,9 @@ fun DisplayScreen(
 
     DisposableEffect(Unit) {
         val activity = context as? Activity
+        // Lock the tablet to the geometry the Mac builds so the mirror fills the panel
+        // without letterboxing: portrait for 90/270, landscape otherwise. Restored on exit.
+        val previousOrientation = activity?.requestedOrientation
         activity?.let {
             val windowInsetsController =
                 WindowCompat.getInsetsController(it.window, it.window.decorView)
@@ -156,6 +166,11 @@ fun DisplayScreen(
                 WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
             windowInsetsController.hide(WindowInsetsCompat.Type.systemBars())
             it.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            it.requestedOrientation = if (rotation.isPortrait) {
+                ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            } else {
+                ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+            }
         }
         vsyncRenderer.start()
         onDispose {
@@ -165,6 +180,8 @@ fun DisplayScreen(
                     WindowCompat.getInsetsController(it.window, it.window.decorView)
                 windowInsetsController.show(WindowInsetsCompat.Type.systemBars())
                 it.window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                it.requestedOrientation =
+                    previousOrientation ?: ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
             }
         }
     }
@@ -176,13 +193,28 @@ fun DisplayScreen(
 
     BackHandler { leaveToConnect() }
 
-    // Applies the current local zoom to the rendered SurfaceView (pivot top-left).
+    // Applies the current local zoom to the rendered SurfaceView (pivot top-left), folding
+    // in the optional 180 flip. Rather than rotating a parent view (SurfaceView's surface
+    // layer does not reliably follow a parent transform), the flip is composed into the
+    // same proven scale/translate path: a 180 turn about the view center is negative scale
+    // on both axes (scaleX = scaleY = -scale, NOT a single-axis mirror) with the pivot at
+    // top-left, so screen = -scale*content + (viewSize - offset). This is exactly the
+    // transform ViewZoom.contentNormalized* inverts when flipped, so taps stay accurate.
     fun applyZoom() {
         surfaceView?.let {
-            it.scaleX = zoom.scale
-            it.scaleY = zoom.scale
-            it.translationX = zoom.offsetX
-            it.translationY = zoom.offsetY
+            val w = it.width.toFloat()
+            val h = it.height.toFloat()
+            if (flipped) {
+                it.scaleX = -zoom.scale
+                it.scaleY = -zoom.scale
+                it.translationX = w - zoom.offsetX
+                it.translationY = h - zoom.offsetY
+            } else {
+                it.scaleX = zoom.scale
+                it.scaleY = zoom.scale
+                it.translationX = zoom.offsetX
+                it.translationY = zoom.offsetY
+            }
         }
     }
 
@@ -203,8 +235,8 @@ fun DisplayScreen(
                 flingJob?.cancel(); flingJob = null
                 velocityTracker.reset(); scrolling = false; lastScrollTimeMs = 0L
 
-                val nx = zoom.contentNormalizedX(event.getX(0), w)
-                val ny = zoom.contentNormalizedY(event.getY(0), h)
+                val nx = zoom.contentNormalizedX(event.getX(0), w, flipped)
+                val ny = zoom.contentNormalizedY(event.getY(0), h, flipped)
                 lastNx = nx; lastNy = ny
                 // Position the cursor immediately (hover); withhold the press.
                 viewModel.sendPointerMove(nx, ny)
@@ -223,8 +255,8 @@ fun DisplayScreen(
                 longPressJob = gestureScope.launch {
                     delay(longPressDetector.longPressThresholdMs)
                     if (longPressDetector.fireIfElapsed(SystemClock.uptimeMillis())) {
-                        val rx = zoom.contentNormalizedX(longPressDetector.anchorX, w)
-                        val ry = zoom.contentNormalizedY(longPressDetector.anchorY, h)
+                        val rx = zoom.contentNormalizedX(longPressDetector.anchorX, w, flipped)
+                        val ry = zoom.contentNormalizedY(longPressDetector.anchorY, h, flipped)
                         // The press has committed by now (debounce << long-press); release
                         // it then right-click, in order.
                         viewModel.sendLongPressRightClick(rx, ry)
@@ -283,7 +315,12 @@ fun DisplayScreen(
                                 val dCx = curCx - prevCx
                                 val dCy = curCy - prevCy
                                 if (zoom.isZoomed) {
-                                    zoom.pan(dCx, dCy, w, h) // pan the magnified view
+                                    // Zoom transform is on the pre-flip surface, so under a
+                                    // 180 flip the screen delta must be negated to pan in
+                                    // the direction the finger moves.
+                                    val panX = if (flipped) -dCx else dCx
+                                    val panY = if (flipped) -dCy else dCy
+                                    zoom.pan(panX, panY, w, h) // pan the magnified view
                                     applyZoom()
                                 } else {
                                     // Not zoomed: two-finger drag scrolls the Mac; track velocity for fling.
@@ -305,8 +342,8 @@ fun DisplayScreen(
                 }
 
                 !gestureMulti && count == 1 -> {
-                    val nx = zoom.contentNormalizedX(event.getX(0), w)
-                    val ny = zoom.contentNormalizedY(event.getY(0), h)
+                    val nx = zoom.contentNormalizedX(event.getX(0), w, flipped)
+                    val ny = zoom.contentNormalizedY(event.getY(0), h, flipped)
                     lastNx = nx; lastNy = ny
                     // Hover (before commit) or drag (after) — the Mac classifies by down-state.
                     if (!longPressConsumed) viewModel.sendPointerMove(nx, ny)
@@ -396,6 +433,9 @@ fun DisplayScreen(
                             height: Int,
                         ) {
                             viewModel.onSurfaceAvailable(holder.surface)
+                            // Apply the current transform now that the view is laid out, so
+                            // a 180 flip shows immediately even before any zoom gesture.
+                            applyZoom()
                         }
 
                         override fun surfaceDestroyed(holder: SurfaceHolder) {
@@ -411,7 +451,7 @@ fun DisplayScreen(
                     ),
                 )
                 // Touches land on the (untransformed) container, so getX/getY are
-                // screen-space regardless of the SurfaceView's zoom transform.
+                // screen-space regardless of the SurfaceView's zoom/flip transforms.
                 container.setOnTouchListener { v, event ->
                     handleTouch(event, v.width, v.height)
                     when (event.actionMasked) {

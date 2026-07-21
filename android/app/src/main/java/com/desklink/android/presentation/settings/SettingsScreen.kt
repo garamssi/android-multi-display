@@ -53,6 +53,7 @@ import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.compose.ui.graphics.SolidColor
 import com.desklink.android.domain.model.DisplayConfig
+import com.desklink.android.domain.model.DisplayRotation
 import com.desklink.android.domain.model.TransportMode
 import com.desklink.android.domain.transport.DiscoveredServer
 import com.desklink.android.presentation.components.GhostTextButton
@@ -171,6 +172,7 @@ fun SettingsScreen(
                                     onSetScrollSensitivity = viewModel::setScrollSensitivity,
                                     onSetNaturalScroll = viewModel::setNaturalScroll,
                                     onSetTouchInput = viewModel::setTouchInputEnabled,
+                                    onSetRotation = viewModel::setDisplayRotation,
                                 )
                             },
                         )
@@ -207,6 +209,7 @@ fun SettingsScreen(
                                         onSetScrollSensitivity = viewModel::setScrollSensitivity,
                                         onSetNaturalScroll = viewModel::setNaturalScroll,
                                         onSetTouchInput = viewModel::setTouchInputEnabled,
+                                        onSetRotation = viewModel::setDisplayRotation,
                                     )
                                 }
                             },
@@ -398,6 +401,7 @@ private fun StreamColumn(
     onSetScrollSensitivity: (Float) -> Unit,
     onSetNaturalScroll: (Boolean) -> Unit,
     onSetTouchInput: (Boolean) -> Unit,
+    onSetRotation: (DisplayRotation) -> Unit,
 ) {
     Column(
         modifier = modifier,
@@ -496,6 +500,18 @@ private fun StreamColumn(
                 onSelect = { onSetTouchInput(it.enabled) },
             ) { option, isSelected ->
                 SegmentLabel(text = option.label, isSelected = isSelected)
+            }
+        }
+
+        Column {
+            SectionLabel("Rotation")
+            Spacer(Modifier.height(14.dp))
+            SegmentedControl(
+                options = SettingsUiState.ROTATION_OPTIONS,
+                selected = state.rotation,
+                onSelect = onSetRotation,
+            ) { rotation, isSelected ->
+                SegmentLabel(text = "${rotation.degrees}°", isSelected = isSelected)
             }
         }
 

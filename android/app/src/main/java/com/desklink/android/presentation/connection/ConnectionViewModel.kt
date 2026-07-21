@@ -58,7 +58,10 @@ class ConnectionViewModel @Inject constructor(
 
     fun connect() {
         viewModelScope.launch {
-            val stored = settingsRepository.current()
+            // Orient the requested resolution for the chosen rotation (portrait sends tall
+            // dims); the Mac builds the display in that geometry. The 180-flip part stays
+            // tablet-side and is not sent.
+            val stored = settingsRepository.current().oriented(settingsRepository.currentDisplayRotation())
             // Wi-Fi keeps the user-selected fps and the native (tablet) resolution, but caps
             // the bitrate. The auto bitrate for this resolution (~40Mbps) saturates a typical
             // Wi-Fi link, which buffers into multi-second freezes and starves the control
