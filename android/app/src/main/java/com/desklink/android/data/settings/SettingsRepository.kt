@@ -2,6 +2,7 @@ package com.desklink.android.data.settings
 
 import com.desklink.android.data.device.ScreenMetricsProvider
 import com.desklink.android.domain.model.DisplayConfig
+import com.desklink.android.domain.model.DisplayRotation
 import com.desklink.android.domain.model.ProtocolConstants
 import com.desklink.android.domain.model.TransportMode
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -80,6 +81,14 @@ class SettingsRepository @Inject constructor(
     val touchInputEnabled: StateFlow<Boolean> = _touchInputEnabled.asStateFlow()
 
     /**
+     * Screen rotation for the mirror. The portrait part is sent to the Mac (via the
+     * oriented request resolution); the 180-flip part is applied on the tablet only. A
+     * local preference, not a wire field of its own. Landscape (0) by default.
+     */
+    private val _displayRotation = MutableStateFlow(loadDisplayRotation())
+    val displayRotation: StateFlow<DisplayRotation> = _displayRotation.asStateFlow()
+
+    /**
      * How the client reaches the Mac ([TransportMode.USB] by default). Read by the
      * transport layer at connect time, so changing it in Settings then reconnecting
      * switches the dial target. LAN is plaintext/dev-only in this phase (see
@@ -148,6 +157,11 @@ class SettingsRepository @Inject constructor(
         store.putBoolean(KEY_TOUCH_INPUT_ENABLED, enabled)
     }
 
+    fun setDisplayRotation(rotation: DisplayRotation) {
+        _displayRotation.update { rotation }
+        store.putInt(KEY_DISPLAY_ROTATION, rotation.degrees)
+    }
+
     fun setTransportMode(mode: TransportMode) {
         _transportMode.update { mode }
         store.putString(KEY_TRANSPORT_MODE, mode.name)
@@ -174,6 +188,8 @@ class SettingsRepository @Inject constructor(
     fun currentNaturalScroll(): Boolean = _naturalScroll.value
 
     fun currentTouchInputEnabled(): Boolean = _touchInputEnabled.value
+
+    fun currentDisplayRotation(): DisplayRotation = _displayRotation.value
 
     fun currentTransportMode(): TransportMode = _transportMode.value
 
@@ -204,6 +220,9 @@ class SettingsRepository @Inject constructor(
         runCatching { TransportMode.valueOf(store.getString(KEY_TRANSPORT_MODE, DEFAULT_TRANSPORT_MODE.name)) }
             .getOrDefault(DEFAULT_TRANSPORT_MODE)
 
+    private fun loadDisplayRotation(): DisplayRotation =
+        DisplayRotation.fromDegrees(store.getInt(KEY_DISPLAY_ROTATION, DEFAULT_DISPLAY_ROTATION.degrees))
+
     companion object {
         const val MIN_SCROLL_SENSITIVITY = 1.0f
         const val MAX_SCROLL_SENSITIVITY = 6.0f
@@ -213,6 +232,8 @@ class SettingsRepository @Inject constructor(
         const val DEFAULT_NATURAL_SCROLL = true
         /** Touch input forwarded by default (current behavior). */
         const val DEFAULT_TOUCH_INPUT_ENABLED = true
+        /** Landscape by default (the tablet's normal extended-display orientation). */
+        val DEFAULT_DISPLAY_ROTATION = DisplayRotation.ROTATION_0
         /** USB is the default and only secure transport today; LAN is opt-in. */
         val DEFAULT_TRANSPORT_MODE = TransportMode.USB
 
@@ -225,6 +246,7 @@ class SettingsRepository @Inject constructor(
         private const val KEY_SCROLL_SENSITIVITY = "scrollSensitivity"
         private const val KEY_NATURAL_SCROLL = "naturalScroll"
         private const val KEY_TOUCH_INPUT_ENABLED = "touchInputEnabled"
+        private const val KEY_DISPLAY_ROTATION = "displayRotationDegrees"
         private const val KEY_TRANSPORT_MODE = "transportMode"
         private const val KEY_MANUAL_HOST = "manualHost"
         private const val KEY_PAIRING_PIN = "pairingPin"

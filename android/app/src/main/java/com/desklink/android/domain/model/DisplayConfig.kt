@@ -21,6 +21,23 @@ data class DisplayConfig(
     val nativeWidth: Int = 1920,
     val nativeHeight: Int = 1200,
 ) {
+    /**
+     * Returns this config with [width]/[height] oriented for [rotation]: portrait
+     * rotations send the long edge as [height] (tall), landscape rotations keep the long
+     * edge as [width]. [nativeWidth]/[nativeHeight] are left untouched — they stay
+     * landscape-normalised so the handshake always advertises the true panel size, which
+     * the Mac clamps orientation-agnostically. Pure so the mapping is unit-testable.
+     */
+    fun oriented(rotation: DisplayRotation): DisplayConfig {
+        val longEdge = maxOf(width, height)
+        val shortEdge = minOf(width, height)
+        return if (rotation.isPortrait) {
+            copy(width = shortEdge, height = longEdge)
+        } else {
+            copy(width = longEdge, height = shortEdge)
+        }
+    }
+
     enum class Codec(val id: Byte) {
         HEVC(0x01),
         H264(0x02);

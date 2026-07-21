@@ -53,13 +53,26 @@ class ViewZoom(private val maxScale: Float = MAX_SCALE) {
         clamp(viewW, viewH)
     }
 
-    /** Normalized [0,1] content X for a screen X, inverting the current transform. */
-    fun contentNormalizedX(screenX: Float, viewW: Float): Float =
-        if (viewW <= 0f) 0f else ((screenX - offsetX) / (scale * viewW)).coerceIn(0f, 1f)
+    /**
+     * Normalized [0,1] content X for a screen X, inverting the current transform.
+     *
+     * When [flipped] the mirror is displayed 180-rotated (the outermost transform), so a
+     * native screen point maps to the opposite end: flip the screen coordinate first
+     * (viewW - screenX), then invert the zoom. This keeps taps accurate under a 180 turn.
+     */
+    fun contentNormalizedX(screenX: Float, viewW: Float, flipped: Boolean = false): Float {
+        if (viewW <= 0f) return 0f
+        val sx = if (flipped) viewW - screenX else screenX
+        return ((sx - offsetX) / (scale * viewW)).coerceIn(0f, 1f)
+    }
 
-    /** Normalized [0,1] content Y for a screen Y, inverting the current transform. */
-    fun contentNormalizedY(screenY: Float, viewH: Float): Float =
-        if (viewH <= 0f) 0f else ((screenY - offsetY) / (scale * viewH)).coerceIn(0f, 1f)
+    /** Normalized [0,1] content Y for a screen Y, inverting the current transform.
+     *  See [contentNormalizedX] for the [flipped] handling. */
+    fun contentNormalizedY(screenY: Float, viewH: Float, flipped: Boolean = false): Float {
+        if (viewH <= 0f) return 0f
+        val sy = if (flipped) viewH - screenY else screenY
+        return ((sy - offsetY) / (scale * viewH)).coerceIn(0f, 1f)
+    }
 
     private fun clamp(viewW: Float, viewH: Float) {
         if (scale <= 1f + EPSILON) {

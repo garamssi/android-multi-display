@@ -180,6 +180,24 @@ class SettingsViewModelTest {
     }
 
     @Test
+    fun `display rotation defaults to landscape 0 and persists`() {
+        val store = FakeSettingsStore()
+        val repo = repository(store = store)
+        assertEquals(com.desklink.android.domain.model.DisplayRotation.ROTATION_0, repo.currentDisplayRotation())
+
+        repo.setDisplayRotation(com.desklink.android.domain.model.DisplayRotation.ROTATION_270)
+        assertEquals(
+            com.desklink.android.domain.model.DisplayRotation.ROTATION_270,
+            repo.currentDisplayRotation(),
+        )
+        // New repository, same store == app restart: the choice is restored.
+        assertEquals(
+            com.desklink.android.domain.model.DisplayRotation.ROTATION_270,
+            repository(store = store).currentDisplayRotation(),
+        )
+    }
+
+    @Test
     fun `transport defaults to USB with no manual host`() {
         val vm = viewModel()
         assertEquals(TransportMode.USB, vm.uiState.value.transportMode)

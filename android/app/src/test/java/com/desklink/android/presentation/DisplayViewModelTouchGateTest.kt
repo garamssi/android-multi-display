@@ -5,6 +5,7 @@ import com.desklink.android.data.device.ScreenMetricsProvider
 import com.desklink.android.data.device.ScreenResolution
 import com.desklink.android.data.settings.SettingsRepository
 import com.desklink.android.domain.model.ConnectionState
+import com.desklink.android.domain.model.DisplayRotation
 import com.desklink.android.domain.model.TouchEvent
 import com.desklink.android.domain.repository.ConnectionRepository
 import com.desklink.android.domain.repository.InputRepository
@@ -103,5 +104,31 @@ class DisplayViewModelTouchGateTest {
 
         coVerify(exactly = 1) { sendTouch.send(match { it.action == TouchEvent.Action.DOWN }) }
         coVerify(exactly = 1) { sendTouch.sendScroll(any(), any()) }
+    }
+
+    @Test
+    fun `a 180 flip negates the scroll delta`() {
+        // Default sensitivity 3.0, natural scroll (dir +1); a flipped rotation adds a -1,
+        // so a (1,1) delta is sent as (-3,-3).
+        val settings = settings().apply { setDisplayRotation(DisplayRotation.ROTATION_180) }
+        val sendTouch = mockk<SendTouchUseCase>(relaxed = true)
+        val vm = viewModel(settings, sendTouch)
+
+        vm.sendScroll(1f, 1f)
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) { sendTouch.sendScroll(-3f, -3f) }
+    }
+
+    @Test
+    fun `no flip keeps the scroll delta sign`() {
+        val settings = settings() // ROTATION_0, not flipped
+        val sendTouch = mockk<SendTouchUseCase>(relaxed = true)
+        val vm = viewModel(settings, sendTouch)
+
+        vm.sendScroll(1f, 1f)
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) { sendTouch.sendScroll(3f, 3f) }
     }
 }

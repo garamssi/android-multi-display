@@ -6,6 +6,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.desklink.android.data.settings.SettingsRepository
 import com.desklink.android.domain.model.ConnectionState
+import com.desklink.android.domain.model.DisplayRotation
 import com.desklink.android.domain.model.TouchEvent
 import com.desklink.android.domain.repository.ConnectionRepository
 import com.desklink.android.domain.repository.InputRepository
@@ -117,8 +118,13 @@ class DisplayViewModel @Inject constructor(
     /** Drives one render tick from the Choreographer callback. */
     fun renderFrame(): Boolean = videoStream.renderFrame()
 
+    /** The rotation chosen in Settings, constant for the session (set before connect). */
+    fun displayRotation(): DisplayRotation = settingsRepository.currentDisplayRotation()
+
     private fun startStreaming() {
-        val config = settingsRepository.current()
+        // Orient the requested resolution for the rotation (portrait sends tall dims), so
+        // the negotiated config, the decoder MediaFormat, and the virtual display all agree.
+        val config = settingsRepository.current().oriented(settingsRepository.currentDisplayRotation())
         Log.i(TAG, "startStreaming config=${config.width}x${config.height} codec=${config.codec}")
         videoJob = viewModelScope.launch {
             // Input channel connects alongside the video stream.
@@ -137,7 +143,10 @@ class DisplayViewModel @Inject constructor(
         if (!touchInputEnabled()) return
         val sensitivity = settingsRepository.currentScrollSensitivity()
         val direction = if (settingsRepository.currentNaturalScroll()) 1f else -1f
-        val scale = sensitivity * direction
+        // A 180 flip inverts both screen axes, so the scroll delta must be negated too to
+        // stay consistent with the flipped view and touch coordinates.
+        val flip = if (settingsRepository.currentDisplayRotation().isFlipped) -1f else 1f
+        val scale = sensitivity * direction * flip
         viewModelScope.launch {
             sendTouchUseCase.sendScroll(deltaX * scale, deltaY * scale)
         }

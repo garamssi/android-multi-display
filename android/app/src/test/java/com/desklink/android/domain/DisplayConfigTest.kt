@@ -1,11 +1,48 @@
 package com.desklink.android.domain
 
 import com.desklink.android.domain.model.DisplayConfig
+import com.desklink.android.domain.model.DisplayRotation
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 
 class DisplayConfigTest {
+
+    @Test
+    fun `oriented keeps landscape for 0 and 180`() {
+        val config = DisplayConfig(width = 2560, height = 1600, nativeWidth = 2560, nativeHeight = 1600)
+        for (rotation in listOf(DisplayRotation.ROTATION_0, DisplayRotation.ROTATION_180)) {
+            val out = config.oriented(rotation)
+            assertEquals(2560, out.width)
+            assertEquals(1600, out.height)
+            // Native size is untouched (always landscape-normalised for the handshake).
+            assertEquals(2560, out.nativeWidth)
+            assertEquals(1600, out.nativeHeight)
+        }
+    }
+
+    @Test
+    fun `oriented swaps to portrait for 90 and 270`() {
+        val config = DisplayConfig(width = 2560, height = 1600, nativeWidth = 2560, nativeHeight = 1600)
+        for (rotation in listOf(DisplayRotation.ROTATION_90, DisplayRotation.ROTATION_270)) {
+            val out = config.oriented(rotation)
+            assertEquals(1600, out.width)
+            assertEquals(2560, out.height)
+            assertEquals(2560, out.nativeWidth)
+            assertEquals(1600, out.nativeHeight)
+        }
+    }
+
+    @Test
+    fun `oriented is idempotent and normalises an already-portrait config`() {
+        // Even if width/height arrive tall, oriented() derives long/short so the result
+        // is deterministic for the rotation.
+        val tall = DisplayConfig(width = 1600, height = 2560)
+        assertEquals(2560, tall.oriented(DisplayRotation.ROTATION_0).width)
+        assertEquals(1600, tall.oriented(DisplayRotation.ROTATION_0).height)
+        assertEquals(1600, tall.oriented(DisplayRotation.ROTATION_90).width)
+        assertEquals(2560, tall.oriented(DisplayRotation.ROTATION_90).height)
+    }
 
     @Test
     fun `default config has expected values`() {
