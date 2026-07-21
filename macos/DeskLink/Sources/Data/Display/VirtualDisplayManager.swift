@@ -58,8 +58,11 @@ public final class VirtualDisplayManager: VirtualDisplayManaging, @unchecked Sen
             return .displayCreateFailed
         case VirtualDisplayBridgeError.creationFailed.rawValue:
             return .displayCreateFailed
-        case VirtualDisplayBridgeError.invalidResolution.rawValue:
+        case VirtualDisplayBridgeError.invalidResolution.rawValue,
+             VirtualDisplayBridgeError.resolutionMismatch.rawValue:
             return .displayResolutionInvalid
+        case VirtualDisplayBridgeError.settingsApplyFailed.rawValue:
+            return .displayCreateFailed
         default:
             return .displayCreateFailed
         }

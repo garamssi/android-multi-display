@@ -1,6 +1,7 @@
 #import "CGVirtualDisplayBridge.h"
 #import <objc/runtime.h>
 #import <objc/message.h>
+#import <unistd.h>
 
 NSErrorDomain const VirtualDisplayBridgeErrorDomain = @"com.desklink.VirtualDisplayBridge";
 
@@ -43,6 +44,13 @@ NSErrorDomain const VirtualDisplayBridgeErrorDomain = @"com.desklink.VirtualDisp
 
 - (void)dealloc {
     [self destroyDisplay];
+}
+
+/// Builds an NSError in the bridge's domain (keeps the failure paths terse).
+- (NSError *)bridgeErrorWithCode:(VirtualDisplayBridgeError)code message:(NSString *)message {
+    return [NSError errorWithDomain:VirtualDisplayBridgeErrorDomain
+                               code:code
+                           userInfo:@{NSLocalizedDescriptionKey: message}];
 }
 
 /// Sets a KVC value, ignoring the exception if the key is absent on this macOS
@@ -156,34 +164,122 @@ NSErrorDomain const VirtualDisplayBridgeErrorDomain = @"com.desklink.VirtualDisp
         return NO;
     }
 
-    // Apply a display mode so the virtual display has a valid resolution. On the
-    // private API the resolution lives in a CGVirtualDisplayMode inside a
-    // CGVirtualDisplaySettings, applied via -applySettings:. Non-fatal on failure.
-    @try {
-        Class modeClass = NSClassFromString(@"CGVirtualDisplayMode");
-        Class settingsClass = NSClassFromString(@"CGVirtualDisplaySettings");
-        if (modeClass && settingsClass) {
-            id<DLKVirtualDisplayMode> mode =
-                [(id<DLKVirtualDisplayMode>)[modeClass alloc] initWithWidth:(uint32_t)width
-                                                                     height:(uint32_t)height
-                                                                refreshRate:60.0];
-            id settings = [[settingsClass alloc] init];
-            [settings setValue:@[mode] forKey:@"modes"];
-            [self trySetValue:@(1) forKey:@"hiDPI" on:settings];
-
-            id<DLKVirtualDisplayApply> applier = (id<DLKVirtualDisplayApply>)_virtualDisplay;
-            if ([applier respondsToSelector:@selector(applySettings:)]) {
-                [applier applySettings:settings];
-            }
+    // Apply a display mode so the virtual display runs at the REQUESTED pixel
+    // resolution. On the private API the resolution lives in a CGVirtualDisplayMode
+    // inside a CGVirtualDisplaySettings, applied via -applySettings:.
+    //
+    // hiDPI is deliberately OFF. With hiDPI the mode's width/height are treated as
+    // POINTS and the backing store becomes 2x, so a WxH mode would be captured at
+    // 2Wx2H and no longer match the tablet's advertised native pixels. The capturer
+    // adopts the display's actual pixel size and streams it 1:1 to the tablet, so the
+    // virtual display's pixel size must equal the requested resolution exactly.
+    // hiDPI=0 makes points == pixels == the requested WxH (== maxPixelsWide/High).
+    // This is the root cause of the historical 1280x800 fallback: with hiDPI on and
+    // maxPixels set to the logical size, the mode was rejected and the display fell
+    // back to a default mode; the previous code discarded the -applySettings: result
+    // and swallowed the exception, so the wrong resolution was streamed silently.
+    Class modeClass = NSClassFromString(@"CGVirtualDisplayMode");
+    Class settingsClass = NSClassFromString(@"CGVirtualDisplaySettings");
+    if (!modeClass || !settingsClass) {
+        if (error) {
+            *error = [self bridgeErrorWithCode:VirtualDisplayBridgeErrorAPINotAvailable
+                                       message:@"CGVirtualDisplayMode/Settings not available on this macOS version"];
         }
-    } @catch (NSException *ex) {
-        NSLog(@"DeskLink: applying virtual display settings failed: %@", ex.reason ?: ex.name);
+        [self destroyDisplay];
+        return NO;
     }
 
-    // Get the display ID
+    @try {
+        id<DLKVirtualDisplayMode> mode =
+            [(id<DLKVirtualDisplayMode>)[modeClass alloc] initWithWidth:(uint32_t)width
+                                                                 height:(uint32_t)height
+                                                            refreshRate:60.0];
+        id settings = [[settingsClass alloc] init];
+        [settings setValue:@[mode] forKey:@"modes"];
+        [self trySetValue:@(0) forKey:@"hiDPI" on:settings];
+
+        id<DLKVirtualDisplayApply> applier = (id<DLKVirtualDisplayApply>)_virtualDisplay;
+        if (![applier respondsToSelector:@selector(applySettings:)]) {
+            if (error) {
+                *error = [self bridgeErrorWithCode:VirtualDisplayBridgeErrorAPINotAvailable
+                                           message:@"CGVirtualDisplay does not respond to applySettings: on this macOS version"];
+            }
+            [self destroyDisplay];
+            return NO;
+        }
+        if (![applier applySettings:settings]) {
+            if (error) {
+                *error = [self bridgeErrorWithCode:VirtualDisplayBridgeErrorSettingsApplyFailed
+                                           message:[NSString stringWithFormat:@"applySettings: rejected mode %lux%lu",
+                                                    (unsigned long)width, (unsigned long)height]];
+            }
+            [self destroyDisplay];
+            return NO;
+        }
+    } @catch (NSException *ex) {
+        if (error) {
+            *error = [self bridgeErrorWithCode:VirtualDisplayBridgeErrorSettingsApplyFailed
+                                       message:[NSString stringWithFormat:@"Applying virtual display settings failed: %@",
+                                                ex.reason ?: ex.name]];
+        }
+        [self destroyDisplay];
+        return NO;
+    }
+
+    // The display must have a valid CGDirectDisplayID; without one the capturer has
+    // nothing to attach to. A missing/zero ID means creation did not really succeed.
     NSNumber *displayIDValue = [_virtualDisplay valueForKey:@"displayID"];
-    if (displayIDValue) {
-        _displayID = [displayIDValue unsignedIntValue];
+    if (!displayIDValue || [displayIDValue unsignedIntValue] == 0) {
+        if (error) {
+            *error = [self bridgeErrorWithCode:VirtualDisplayBridgeErrorCreationFailed
+                                       message:@"Virtual display has no valid display ID"];
+        }
+        [self destroyDisplay];
+        return NO;
+    }
+    _displayID = [displayIDValue unsignedIntValue];
+
+    // Read back the active mode and confirm the display really is at the requested
+    // pixel size. The virtual display is registered with CoreGraphics asynchronously
+    // (the descriptor carries a dispatch queue), so the active mode may not reflect the
+    // applied settings the instant -applySettings: returns. Poll — bounded — until it
+    // matches. This distinguishes "not yet settled" from a genuine fallback
+    // substitution (the 1280x800 bug): a persistent mismatch after the ceiling is a
+    // real error, while a match short-circuits immediately. The bound keeps this from
+    // hiding a logic bug — it only waits out the CG registration latency.
+    static const useconds_t kModeSettlePollIntervalUs = 25 * 1000; // 25 ms
+    static const int kModeSettleMaxAttempts = 80;                  // ~2 s ceiling
+
+    size_t actualWidth = 0;
+    size_t actualHeight = 0;
+    BOOL resolutionMatches = NO;
+    for (int attempt = 0; attempt < kModeSettleMaxAttempts; attempt++) {
+        CGDisplayModeRef activeMode = CGDisplayCopyDisplayMode(_displayID);
+        if (activeMode) {
+            actualWidth = CGDisplayModeGetPixelWidth(activeMode);
+            actualHeight = CGDisplayModeGetPixelHeight(activeMode);
+            CGDisplayModeRelease(activeMode);
+            if (actualWidth == width && actualHeight == height) {
+                resolutionMatches = YES;
+                break;
+            }
+        }
+        usleep(kModeSettlePollIntervalUs);
+    }
+
+    NSLog(@"DeskLink: virtual display requested %lux%lu, active %zux%zu",
+          (unsigned long)width, (unsigned long)height, actualWidth, actualHeight);
+
+    if (!resolutionMatches) {
+        if (error) {
+            *error = [self bridgeErrorWithCode:VirtualDisplayBridgeErrorResolutionMismatch
+                                       message:[NSString stringWithFormat:
+                                                @"Requested %lux%lu but display settled at %zux%zu",
+                                                (unsigned long)width, (unsigned long)height,
+                                                actualWidth, actualHeight]];
+        }
+        [self destroyDisplay];
+        return NO;
     }
 
     _displayName = name ?: @"DeskLink Display";

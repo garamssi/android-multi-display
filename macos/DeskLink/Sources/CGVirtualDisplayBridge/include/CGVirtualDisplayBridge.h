@@ -52,6 +52,10 @@ typedef NS_ERROR_ENUM(VirtualDisplayBridgeErrorDomain, VirtualDisplayBridgeError
     VirtualDisplayBridgeErrorAlreadyActive = 3,
     VirtualDisplayBridgeErrorNotActive = 4,
     VirtualDisplayBridgeErrorInvalidResolution = 5,
+    /// -applySettings: rejected the requested mode (would otherwise fall back silently).
+    VirtualDisplayBridgeErrorSettingsApplyFailed = 6,
+    /// The active display mode does not match the requested pixel resolution.
+    VirtualDisplayBridgeErrorResolutionMismatch = 7,
 };
 
 NS_ASSUME_NONNULL_END
