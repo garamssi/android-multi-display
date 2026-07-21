@@ -83,9 +83,10 @@ fun DisplayScreen(
 ) {
     val context = LocalContext.current
 
-    // Floating controls handle: always visible, draggable anywhere, position persisted, and
-    // dimmed while idle. Using a fixed on-screen handle (not a multi-finger gesture) avoids
-    // clashing with the tablet's system gestures.
+    // Floating controls handle: always visible, dimmed while idle, and draggable anywhere
+    // for the session. Position is NOT persisted — every launch it starts at the
+    // bottom-center and the user re-places it as they like. A fixed on-screen handle (not a
+    // multi-finger gesture) avoids clashing with the tablet's system gestures.
     var controlsExpanded by remember { mutableStateOf(false) }
 
     // Single-finger long-press = right-click. Timing runs on the composition scope.
@@ -432,10 +433,9 @@ fun DisplayScreen(
 
         DraggableControls(
             expanded = controlsExpanded,
-            initialFractionX = viewModel.controlHandleFractionX(),
-            initialFractionY = viewModel.controlHandleFractionY(),
+            initialFractionX = HANDLE_INITIAL_FRACTION_X,
+            initialFractionY = HANDLE_INITIAL_FRACTION_Y,
             onToggle = { controlsExpanded = !controlsExpanded },
-            onMoved = { fx, fy -> viewModel.saveControlHandleFraction(fx, fy) },
             onSettings = {
                 if (!exiting) {
                     exiting = true
@@ -493,6 +493,13 @@ private const val CONTROLS_DIM_ALPHA = 0.65f
 /** Diameter of the draggable controls handle (matches GlassCircleButton). */
 private val HANDLE_SIZE = 48.dp
 
+/** Where the handle starts on every launch (fraction 0..1 of the draggable area):
+ *  bottom-center. The position is intentionally NOT persisted — the user drags it wherever
+ *  they want for the session, and it returns here next time. Y < 1 keeps it just above the
+ *  bottom gesture-nav area. */
+private const val HANDLE_INITIAL_FRACTION_X = 0.5f
+private const val HANDLE_INITIAL_FRACTION_Y = 0.9f
+
 /** Max gap between the last scroll movement and the finger lift for a fling to start. */
 private const val FLING_MAX_RELEASE_GAP_MS = 60L
 
@@ -533,9 +540,10 @@ private fun MotionEvent.toPointerPhase(): PointerPhase? = when (actionMasked) {
 private val StandardEasing = CubicBezierEasing(0.4f, 0f, 0.2f, 1f)
 
 /**
- * Always-visible controls: a draggable handle whose position is restored from and saved to
- * [onMoved], dimmed while idle. Uses a fixed on-screen affordance (not a multi-finger
- * gesture) so it never clashes with the tablet's own system gestures.
+ * Always-visible controls: a draggable handle that starts at [initialFractionX] /
+ * [initialFractionY] each launch and can be dragged anywhere for the session, dimmed while
+ * idle. The position is deliberately NOT persisted. Uses a fixed on-screen affordance (not
+ * a multi-finger gesture) so it never clashes with the tablet's own system gestures.
  */
 @Composable
 private fun DraggableControls(
@@ -543,7 +551,6 @@ private fun DraggableControls(
     initialFractionX: Float,
     initialFractionY: Float,
     onToggle: () -> Unit,
-    onMoved: (fractionX: Float, fractionY: Float) -> Unit,
     onSettings: () -> Unit,
     onDisconnect: () -> Unit,
 ) {
@@ -585,11 +592,10 @@ private fun DraggableControls(
                 onSettings = onSettings,
                 onDisconnect = onDisconnect,
                 handleModifier = Modifier.pointerInput(rangeX, rangeY) {
+                    // Drag updates the in-session position only; it is not saved, so the
+                    // handle returns to its initial spot on the next launch.
                     detectDragGestures(
                         onDragStart = { interaction++ },
-                        onDragEnd = {
-                            onMoved((hx / rangeX).coerceIn(0f, 1f), (hy / rangeY).coerceIn(0f, 1f))
-                        },
                     ) { change, drag ->
                         change.consume()
                         hx = (hx + drag.x).coerceIn(0f, rangeX)
