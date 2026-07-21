@@ -322,6 +322,15 @@ public final class ServerCoordinator {
         }
         let displayID = displayManager.displayID
 
+        // Surface the display's ACTUAL resolution vs the request. If these differ the
+        // private CGVirtualDisplay API substituted a fallback mode (the 1280x800 bug);
+        // logging it here (visible in the stream category) drives the real fix without
+        // failing the connection.
+        if let actual = displayManager.activeResolution {
+            let matches = actual.width == config.width && actual.height == config.height
+            Log.info(.stream, "virtual display active \(actual.width)x\(actual.height) vs requested \(config.width)x\(config.height)\(matches ? "" : " (MISMATCH: private-API mode fallback)")")
+        }
+
         // Configure the encoder so VIDEO_CONFIG / frames are produced at the
         // negotiated resolution and bitrate.
         try await encoder.configure(config: config)

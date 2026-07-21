@@ -1,4 +1,5 @@
 import Foundation
+import CoreGraphics
 import CGVirtualDisplayBridge
 
 public final class VirtualDisplayManager: VirtualDisplayManaging, @unchecked Sendable {
@@ -52,17 +53,23 @@ public final class VirtualDisplayManager: VirtualDisplayManaging, @unchecked Sen
         lock.withLock { bridge.displayID }
     }
 
+    /// The display's actual active pixel resolution, or nil if inactive/unavailable.
+    /// Used to surface a private-API mode fallback (e.g. the 1280x800 bug) in the logs
+    /// without failing the connection.
+    public var activeResolution: (width: Int, height: Int)? {
+        let id = lock.withLock { bridge.displayID }
+        guard id != 0, let mode = CGDisplayCopyDisplayMode(id) else { return nil }
+        return (mode.pixelWidth, mode.pixelHeight)
+    }
+
     private func mapError(_ nsError: NSError) -> ConnectionError {
         switch nsError.code {
         case VirtualDisplayBridgeError.apiNotAvailable.rawValue:
             return .displayCreateFailed
         case VirtualDisplayBridgeError.creationFailed.rawValue:
             return .displayCreateFailed
-        case VirtualDisplayBridgeError.invalidResolution.rawValue,
-             VirtualDisplayBridgeError.resolutionMismatch.rawValue:
+        case VirtualDisplayBridgeError.invalidResolution.rawValue:
             return .displayResolutionInvalid
-        case VirtualDisplayBridgeError.settingsApplyFailed.rawValue:
-            return .displayCreateFailed
         default:
             return .displayCreateFailed
         }
