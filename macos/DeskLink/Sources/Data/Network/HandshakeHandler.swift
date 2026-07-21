@@ -71,9 +71,20 @@ public final class HandshakeHandler: Sendable {
             throw ConnectionError.codecNotSupported
         }
 
-        // Negotiate: clamp to supported ranges.
-        let width = min(requestedWidth, clientInfo.screenWidth)
-        let height = min(requestedHeight, clientInfo.screenHeight)
+        // Negotiate: clamp to the tablet panel. The requested resolution may be in
+        // either orientation (a portrait request carries height > width), so clamp the
+        // long/short edges against the panel's long/short edges and then restore the
+        // requested orientation. A naive per-axis min() would shrink a portrait
+        // request's height down to the panel's landscape height and distort it.
+        let panelLong = max(clientInfo.screenWidth, clientInfo.screenHeight)
+        let panelShort = min(clientInfo.screenWidth, clientInfo.screenHeight)
+        let requestedLong = max(requestedWidth, requestedHeight)
+        let requestedShort = min(requestedWidth, requestedHeight)
+        let clampedLong = min(requestedLong, panelLong)
+        let clampedShort = min(requestedShort, panelShort)
+        let isPortrait = requestedHeight > requestedWidth
+        let width = isPortrait ? clampedShort : clampedLong
+        let height = isPortrait ? clampedLong : clampedShort
         let fps = min(requestedFps, max(1, clientInfo.maxFps))
         let codec: DisplayConfig.Codec = requestedCodec == "h264" ? .h264 : .hevc
         let bitrate = max(1000, min(requestedBitrate, 40_000))

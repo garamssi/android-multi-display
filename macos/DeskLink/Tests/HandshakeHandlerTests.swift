@@ -79,6 +79,62 @@ final class HandshakeHandlerTests: XCTestCase {
         XCTAssertEqual(config.bitrateKbps, 40_000) // clamped from 50000 to max 40000
     }
 
+    func testPortraitRequestKeepsOrientationAndFillsPanel() throws {
+        // Panel advertised in landscape (2560x1600). A portrait request (height > width)
+        // must stay portrait and map to the panel rotated, not get its height clamped
+        // to the landscape height.
+        let clientInfo = ClientInfo(
+            clientName: "Test", clientVersion: "1.0", deviceModel: "Test",
+            screenWidth: 2560, screenHeight: 1600, maxFps: 60,
+            supportedCodecs: ["hevc"], multiTouchMaxPoints: 10
+        )
+        let requestJson: [String: Any] = [
+            "width": 1600, "height": 2560, "fps": 60, "codec": "hevc", "bitrateKbps": 20000
+        ]
+        let data = try JSONSerialization.data(withJSONObject: requestJson)
+        let (_, config) = try handler.handleConfigRequest(payload: data, clientInfo: clientInfo)
+
+        XCTAssertEqual(config.width, 1600)
+        XCTAssertEqual(config.height, 2560)
+        XCTAssertTrue(config.height > config.width) // still portrait
+    }
+
+    func testPortraitRequestClampsLongAndShortEdges() throws {
+        // Panel 1920x1200; an oversized portrait request clamps its long edge to the
+        // panel long edge (1920) and its short edge to the panel short edge (1200),
+        // preserving portrait orientation.
+        let clientInfo = ClientInfo(
+            clientName: "Test", clientVersion: "1.0", deviceModel: "Test",
+            screenWidth: 1920, screenHeight: 1200, maxFps: 60,
+            supportedCodecs: ["hevc"], multiTouchMaxPoints: 10
+        )
+        let requestJson: [String: Any] = [
+            "width": 1300, "height": 2600, "fps": 60, "codec": "hevc", "bitrateKbps": 20000
+        ]
+        let data = try JSONSerialization.data(withJSONObject: requestJson)
+        let (_, config) = try handler.handleConfigRequest(payload: data, clientInfo: clientInfo)
+
+        XCTAssertEqual(config.width, 1200)  // short edge clamped to panel short
+        XCTAssertEqual(config.height, 1920) // long edge clamped to panel long
+    }
+
+    func testLandscapeSmallerThanPanelIsUnchanged() throws {
+        // No regression: a landscape request within the panel passes through as-is.
+        let clientInfo = ClientInfo(
+            clientName: "Test", clientVersion: "1.0", deviceModel: "Test",
+            screenWidth: 1920, screenHeight: 1200, maxFps: 60,
+            supportedCodecs: ["hevc"], multiTouchMaxPoints: 10
+        )
+        let requestJson: [String: Any] = [
+            "width": 1280, "height": 800, "fps": 60, "codec": "hevc", "bitrateKbps": 20000
+        ]
+        let data = try JSONSerialization.data(withJSONObject: requestJson)
+        let (_, config) = try handler.handleConfigRequest(payload: data, clientInfo: clientInfo)
+
+        XCTAssertEqual(config.width, 1280)
+        XCTAssertEqual(config.height, 800)
+    }
+
     // MARK: - Validation (S-M4 / S-M5)
 
     private func clientInfo(supportedCodecs: [String]) -> ClientInfo {

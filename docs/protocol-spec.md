@@ -155,6 +155,13 @@ Payload: JSON (UTF-8)
 }
 ```
 
+`width`/`height`는 요청 화면 방향을 그대로 담는다. 세로(portrait) 요청은 `height > width`로
+보낸다. 서버는 방향을 보존한 채 태블릿 패널에 맞춰 클램프한다: 요청의 긴 변은 패널의 긴 변,
+짧은 변은 패널의 짧은 변에 각각 `min`으로 맞춘다(축별 단순 `min`이 아니다 — 세로 요청의
+height가 가로 패널 height로 깎여 왜곡되는 것을 막기 위함). 별도의 orientation 필드는 없으며
+방향은 dims로만 표현한다. 화면의 상하 반전(180 플립)은 태블릿에서만 처리하고 이 프로토콜로는
+전달하지 않는다.
+
 ### 3.6 CONFIG_RESPONSE (0x04)
 
 Payload: JSON (UTF-8)
