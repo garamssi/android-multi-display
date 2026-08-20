@@ -45,6 +45,28 @@ def video_frame(ts_us, flags, frame_no, nal) -> bytes:
 def video_config(codec_id, cfg) -> bytes:
     return struct.pack(">B H", codec_id, len(cfg)) + cfg
 
+# ---- AUDIO_CONFIG (0x30) payload: SampleRate(u32,4)+Channels(1)+BitsPerSample(1)+Encoding(1) = 7B ----
+def audio_config(sample_rate, channels, bits_per_sample, encoding) -> bytes:
+    return struct.pack(">I B B B", sample_rate, channels, bits_per_sample, encoding)
+
+# ---- AUDIO_FRAME (0x31) payload: Timestamp(i64 us,8)+FrameCount(u32,4)+PCM ----
+# Header fields are Big-Endian like everything else. The PCM block is OPAQUE and is
+# signed 16-bit LITTLE-endian (declared by AUDIO_CONFIG's Encoding byte) so the Android
+# client can hand the bytes straight to AudioTrack, whose PCM16 is native-endian.
+def audio_frame(ts_us, frame_count, pcm) -> bytes:
+    return struct.pack(">q I", ts_us, frame_count) + pcm
+
+# ---- Interleaved signed-16 little-endian PCM from float samples in [-1, 1] ----
+# Scale by 32768 so -1.0 maps exactly onto Int16.min and the full range is used; the
+# clamp absorbs +1.0 landing one step past Int16.max, and any overdriven sample.
+def pcm_s16le(samples) -> bytes:
+    out = bytearray()
+    for value in samples:
+        scaled = round(value * 32768.0)
+        scaled = max(-32768, min(32767, scaled))
+        out += struct.pack("<h", scaled)
+    return bytes(out)
+
 print("=== DeskLink protocol golden vectors (Big-Endian) ===\n")
 
 t = touch(0x02, 0.5, 0.25, 32768, 1, 1234567890123456)
@@ -82,6 +104,22 @@ check("VIDEO_CONFIG", vc, None)
 ping = struct.pack(">q", 1700000000000)
 check("PING(i64 ms)", ping, None)
 
+ac = audio_config(48000, 2, 16, 0x01)
+check("AUDIO_CONFIG(7B)", ac, "0000BB80021001")
+assert len(ac) == 7, "audio config must be 7 bytes"
+
+check("FRAMED_AUDIO_CONFIG", frame(0x30, ac), "000000083000 00BB80021001".replace(" ", ""))
+
+# Two stereo sample frames of 16-bit PCM = 8 bytes.
+apcm = bytes([0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08])
+af = audio_frame(1000000, 2, apcm)
+check("AUDIO_FRAME_HDR+pcm", af, "00000000000F4240" "00000002" + h(apcm))
+
+check("PCM_S16LE(silence)", pcm_s16le([0.0]), "0000")
+check("PCM_S16LE(full+)", pcm_s16le([1.0]), "FF7F")
+check("PCM_S16LE(full-)", pcm_s16le([-1.0]), "0080")
+check("PCM_S16LE(clamped)", pcm_s16le([1.5, -1.5]), "FF7F0080")
+
 # ---- Round-trip decode ----
 print("\n=== Round-trip decode ===")
 action, x, y, pressure, pid, ts = struct.unpack(">B f f H B q", t)
@@ -108,6 +146,45 @@ vts, flags, fn = struct.unpack(">q B I", vf[0:13]); nal_out = vf[13:]
 vok = (vts==1000000 and (flags&0x01)!=0 and fn==42 and nal_out==nal)
 print(f"video header: ts={vts} keyframe={bool(flags&1)} frameNo={fn} nalLen={len(nal_out)} -> {'OK' if vok else 'FAIL'}")
 failures += 0 if vok else 1
+
+ats, acount = struct.unpack(">q I", af[0:12]); apcm_out = af[12:]
+aok = (ats == 1000000 and acount == 2 and apcm_out == apcm)
+print(f"audio header: ts={ats} frameCount={acount} pcmLen={len(apcm_out)} -> {'OK' if aok else 'FAIL'}")
+failures += 0 if aok else 1
+
+sr, ch, bps, enc = struct.unpack(">I B B B", ac)
+acok = (sr == 48000 and ch == 2 and bps == 16 and enc == 0x01)
+print(f"audio config RT: rate={sr} ch={ch} bits={bps} enc=0x{enc:02X} -> {'OK' if acok else 'FAIL'}")
+failures += 0 if acok else 1
+
+# frameCount must agree with the PCM length: frames * channels * bytesPerSample.
+consistent = (len(apcm_out) == acount * ch * (bps // 8))
+print(f"audio frameCount consistency: {len(apcm_out)} == {acount}*{ch}*{bps//8} -> {'OK' if consistent else 'FAIL'}")
+failures += 0 if consistent else 1
+
+# Negative timestamps must survive the signed round trip rather than wrapping.
+neg = audio_frame(-1, 1, b"\xAA\xBB")
+negok = (neg[0:8] == b"\xFF" * 8 and struct.unpack(">q", neg[0:8])[0] == -1)
+print(f"audio negative ts: -1 -> {h(neg[0:8])} -> {'OK' if negok else 'FAIL'}")
+failures += 0 if negok else 1
+
+# A frameCount that cannot describe the payload must be rejected by receivers. Read as a
+# signed int32 a large uint32 arrives negative, and a huge positive value overflows
+# frameCount*bytesPerFrame in 32-bit arithmetic so a naive consistency check passes.
+def frame_count_is_valid(frame_count_u32, pcm_len, channels, bits_per_sample) -> bool:
+    as_signed = frame_count_u32 - (1 << 32) if frame_count_u32 >= (1 << 31) else frame_count_u32
+    if as_signed <= 0 or as_signed > pcm_len:
+        return False
+    return pcm_len == as_signed * channels * (bits_per_sample // 8)
+
+bad_cases = [(0x40000001, 4), (0xFFFFFFFF, 4), (0, 4), (5, 4)]
+bad_ok = all(not frame_count_is_valid(fc, n, 2, 16) for fc, n in bad_cases)
+print(f"audio frameCount rejection: {[hex(c[0]) for c in bad_cases]} -> {'OK' if bad_ok else 'FAIL'}")
+failures += 0 if bad_ok else 1
+
+good_ok = frame_count_is_valid(2, 8, 2, 16)
+print(f"audio frameCount acceptance: 2 frames / 8 bytes stereo16 -> {'OK' if good_ok else 'FAIL'}")
+failures += 0 if good_ok else 1
 
 # max-packet boundary sanity
 MAX = 4*1024*1024

@@ -43,6 +43,17 @@ class HEVCDecoder @Inject constructor() {
     /** Encoded frames waiting for an available input buffer (FIFO, oldest first). */
     private val pendingFrames = ArrayDeque<PendingFrame>()
 
+    /**
+     * Invoked for each frame as it is released to the Surface, with the frame's server
+     * timestamp (microseconds, host uptime on the Mac) and the local `System.nanoTime`
+     * at which it was rendered.
+     *
+     * Used to align audio with the picture; see `AvSyncCoordinator`. Nullable and
+     * unset by default so the video path has no dependency on audio being present.
+     */
+    @Volatile
+    var onFrameRendered: ((serverTimestampUs: Long, localNanos: Long) -> Unit)? = null
+
     private data class PendingFrame(val data: ByteArray, val timestampUs: Long)
 
     /**
@@ -160,6 +171,8 @@ class HEVCDecoder @Inject constructor() {
         pumpInput()
 
         var rendered = false
+        // Server timestamp of the newest frame released in this pass, or null if none.
+        var lastRenderedTimestampUs: Long? = null
         while (true) {
             val outputIndex = try {
                 codec.dequeueOutputBuffer(bufferInfo, 0L) // non-blocking
@@ -169,6 +182,7 @@ class HEVCDecoder @Inject constructor() {
 
             when {
                 outputIndex >= 0 -> {
+                    lastRenderedTimestampUs = bufferInfo.presentationTimeUs
                     codec.releaseOutputBuffer(outputIndex, true) // render to surface
                     rendered = true
                     // keep looping to drain every ready output buffer
@@ -189,6 +203,12 @@ class HEVCDecoder @Inject constructor() {
                 }
             }
         }
+        // Report ONE observation per drain pass, for the newest frame. Every buffer
+        // released here goes to the Surface, but only the last one is the picture the
+        // viewer sees, and they would all be stamped with the same local time — so
+        // reporting each of them would feed the sync reference a burst of observations
+        // describing a render that never happened that way.
+        lastRenderedTimestampUs?.let { onFrameRendered?.invoke(it, System.nanoTime()) }
         return rendered
     }
 

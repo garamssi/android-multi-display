@@ -138,6 +138,7 @@ fun SettingsScreen(
                             onSetCodec = viewModel::setCodec,
                             onSetScrollSensitivity = viewModel::setScrollSensitivity,
                             onSetNaturalScroll = viewModel::setNaturalScroll,
+                            onSetPlayMacAudio = viewModel::setPlayMacAudio,
                         )
                     }
                 } else {
@@ -163,6 +164,7 @@ fun SettingsScreen(
                             onSetCodec = viewModel::setCodec,
                             onSetScrollSensitivity = viewModel::setScrollSensitivity,
                             onSetNaturalScroll = viewModel::setNaturalScroll,
+                            onSetPlayMacAudio = viewModel::setPlayMacAudio,
                         )
                     }
                 }
@@ -270,6 +272,7 @@ private fun StreamColumn(
     onSetCodec: (DisplayConfig.Codec) -> Unit,
     onSetScrollSensitivity: (Float) -> Unit,
     onSetNaturalScroll: (Boolean) -> Unit,
+    onSetPlayMacAudio: (Boolean) -> Unit,
 ) {
     Column(
         modifier = modifier,
@@ -360,6 +363,20 @@ private fun StreamColumn(
                 selected = SettingsUiState.SCROLL_DIRECTION_OPTIONS
                     .first { it.natural == state.naturalScroll },
                 onSelect = { onSetNaturalScroll(it.natural) },
+            ) { option, isSelected ->
+                SegmentLabel(text = option.label, isSelected = isSelected)
+            }
+        }
+
+        // Mac audio. Only takes effect when the Mac is also routing audio here; with
+        // routing off the Mac never opens the audio channel and this has no effect.
+        Column {
+            SectionLabel("Mac audio")
+            Spacer(Modifier.height(14.dp))
+            SegmentedControl(
+                options = SettingsUiState.AUDIO_OPTIONS,
+                selected = SettingsUiState.AUDIO_OPTIONS.first { it.enabled == state.playMacAudio },
+                onSelect = { onSetPlayMacAudio(it.enabled) },
             ) { option, isSelected ->
                 SegmentLabel(text = option.label, isSelected = isSelected)
             }

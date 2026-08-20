@@ -22,8 +22,14 @@ public final class SettingsViewModel {
 
     private let permissions: PermissionsManaging
 
-    public init(permissions: PermissionsManaging = SystemPermissions()) {
+    private let audioPreference: AudioOutputPreference
+
+    public init(
+        permissions: PermissionsManaging = SystemPermissions(),
+        audioPreference: AudioOutputPreference = AudioOutputPreference()
+    ) {
         self.permissions = permissions
+        self.audioPreference = audioPreference
         refresh()
     }
 
@@ -32,6 +38,23 @@ public final class SettingsViewModel {
     public var verboseLogging: Bool {
         get { Log.isVerbose }
         set { Log.isVerbose = newValue }
+    }
+
+    /// The persisted "play Mac audio on the tablet" flag. Computed over
+    /// [AudioOutputPreference] so there is a single source of truth, matching how
+    /// [verboseLogging] is handled.
+    public var routeAudioToTablet: Bool {
+        get { audioPreference.routeToTablet }
+        set { audioPreference.routeToTablet = newValue }
+    }
+
+    /// True when this Mac can capture system audio at all. Core Audio process taps are
+    /// the only way to do it without leaving the sound playing on the Mac, and they
+    /// require macOS 14.2 — so on older systems the toggle is shown disabled rather
+    /// than offering something that cannot work.
+    public var systemAudioCaptureSupported: Bool {
+        if #available(macOS 14.2, *) { return true }
+        return false
     }
 
     /// Re-reads both permission states. Called on open and periodically while the

@@ -6,16 +6,25 @@ public final class StartStreamingUseCase: Sendable {
     private let encoder: any VideoEncoding
     private let streamServer: any StreamServing
 
+    /// Invoked when the user ends screen sharing from the system capture indicator.
+    ///
+    /// That is an explicit end of session, not a broken stream: the whole server must come
+    /// down (audio included) and the UI must offer Start again. Without this the video
+    /// stopped while the server kept listening and the audio tap kept streaming.
+    private let onSharingEndedByUser: (@Sendable () async -> Void)?
+
     public init(
         displayManager: any VirtualDisplayManaging,
         screenCapturer: any ScreenCapturing,
         encoder: any VideoEncoding,
-        streamServer: any StreamServing
+        streamServer: any StreamServing,
+        onSharingEndedByUser: (@Sendable () async -> Void)? = nil
     ) {
         self.displayManager = displayManager
         self.screenCapturer = screenCapturer
         self.encoder = encoder
         self.streamServer = streamServer
+        self.onSharingEndedByUser = onSharingEndedByUser
     }
 
     /// Runs the video streaming loop, one connected client at a time.
@@ -50,8 +59,14 @@ public final class StartStreamingUseCase: Sendable {
                     try await streamToClient(config: config, displayID: displayID)
                     Log.info(.stream, "stream: capture loop ended (client gone)")
                 } catch {
-                    Log.error(.stream, "stream: streamToClient error: \(error)")
                     await screenCapturer.stopCapture()
+                    switch CaptureStopReason(error: error) {
+                    case .endedByUser:
+                        Log.info(.stream, "stream: user stopped screen sharing -> ending session")
+                        await onSharingEndedByUser?()
+                    case .failure:
+                        Log.error(.stream, "stream: streamToClient error: \(error)")
+                    }
                 }
             }
         }

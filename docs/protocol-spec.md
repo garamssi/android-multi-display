@@ -14,12 +14,14 @@ Mac 서버와 Android 클라이언트 간 통신 프로토콜 정의.
 | Control | 핸드셰이크, 설정 협상, 상태 제어 | TCP | 7100 |
 | Video | HEVC 인코딩 프레임 스트림 | TCP | 7101 |
 | Input | 터치/입력 이벤트 역전송 | TCP | 7102 |
+| Audio | 맥 시스템 오디오 PCM 스트림 | TCP | 7103 |
 
 USB 모드에서는 ADB **reverse** 터널로 연결한다. Mac이 서버(리슨)이고 Android가 `127.0.0.1`로 접속하는 클라이언트이므로 `adb reverse`(device→host)를 사용한다:
 ```bash
 adb reverse tcp:7100 tcp:7100   # Control
 adb reverse tcp:7101 tcp:7101   # Video
 adb reverse tcp:7102 tcp:7102   # Input
+adb reverse tcp:7103 tcp:7103   # Audio
 ```
 
 ---
@@ -62,6 +64,8 @@ adb reverse tcp:7102 tcp:7102   # Input
 | 0x0A | DISCONNECT | 양방향 | 정상 종료 |
 | 0x0B | BITRATE_UPDATE | Server → Client | 비트레이트 변경 통보 |
 | 0x0C | CONFIG_UPDATE | 양방향 | 스트림 중 설정 변경 요청 |
+
+타입 코드 대역: Control `0x01-0x0F`, Video `0x10-0x1F`, Input `0x20-0x2F`, Audio `0x30-0x3F`.
 
 ### 3.2 핸드셰이크 흐름
 
@@ -360,7 +364,78 @@ X, Y 좌표: 0.0 ~ 1.0 정규화 좌표 (가상 디스플레이 해상도 대비
 
 ---
 
-## 6. 에러 코드 정의
+## 6. Audio 채널 메시지
+
+맥의 시스템 오디오를 태블릿으로 보내 **태블릿에서만** 소리가 나게 하는 채널이다. 맥에서는 재생되지
+않는다: 서버는 Core Audio 프로세스 탭(macOS 14.2+)을 `CATapMutedWhenTapped`로 생성하므로, 읽는
+동안 오디오가 출력 장치로 가지 않고 이 채널로만 흐른다. 서버가 읽기를 멈추면 OS가 로컬 재생을
+자동 복구하므로 "맥이 무음인 채로 남는" 상태가 존재하지 않는다.
+
+### 6.1 메시지 타입
+
+| Type Code | 이름 | 방향 | 설명 |
+|-----------|------|------|------|
+| 0x30 | AUDIO_CONFIG | Server → Client | PCM 포맷 통보 |
+| 0x31 | AUDIO_FRAME | Server → Client | PCM 블록 |
+
+AUDIO_CONFIG는 첫 AUDIO_FRAME보다 **반드시 먼저** 전송된다. 샘플레이트를 모르는 클라이언트는
+재생을 시작할 수 없다.
+
+### 6.2 AUDIO_CONFIG (0x30)
+
+Payload (7 bytes):
+
+```
++---------------------+------------------+---------------------+-----------------+
+| Sample Rate         | Channels         | Bits Per Sample     | Encoding        |
+| (4 bytes uint32)    | (1 byte)         | (1 byte)            | (1 byte)        |
++---------------------+------------------+---------------------+-----------------+
+```
+
+| Encoding | 이름 | 설명 |
+|----------|------|------|
+| 0x01 | PCM_S16LE | 인터리브 signed 16-bit **little-endian** |
+
+`Bits Per Sample`은 `Encoding`이 함의하는 값과 일치해야 한다. 불일치하는 조합, `Sample Rate = 0`,
+`Channels = 0`은 모두 거부한다.
+
+### 6.3 AUDIO_FRAME (0x31)
+
+Payload:
+
+```
++---------------------+---------------------+-------------+
+| Timestamp (8 bytes) | Frame Count         | PCM Data    |
+| int64, microseconds | (4 bytes uint32)    |             |
++---------------------+---------------------+-------------+
+```
+
+- `Timestamp`: 첫 샘플 프레임의 캡처 시각. **VIDEO_FRAME의 Timestamp와 동일한 축**(호스트 가동
+  시간 마이크로초)이다. 립싱크는 전적으로 이 공유 축에 의존한다.
+- `Frame Count`: 채널당 **샘플 프레임 수**(바이트 수도, 전체 샘플 수도 아니다).
+  `len(PCM) == Frame Count * Channels * BitsPerSample / 8`을 만족해야 하며, 수신 측은 재생 타이밍에
+  이 값을 쓰기 전에 반드시 검증한다.
+
+### 6.4 PCM 페이로드의 엔디안
+
+헤더 필드는 프로토콜 전체와 같이 big-endian이지만, **PCM 블록은 little-endian**이다. VIDEO_FRAME이
+Annex-B NAL 바이트를 불투명하게 싣는 것과 같은 취급으로, 레이아웃은 AUDIO_CONFIG의 `Encoding`이
+선언한다. 안드로이드 `AudioTrack`의 `ENCODING_PCM_16BIT`가 네이티브 엔디안(리틀)이라, 이렇게 두면
+변환이 맥에서 한 번만 일어나고 태블릿의 재생 경로에는 샘플당 연산이 없다.
+
+Float32 → Int16 변환은 **32768로 스케일한 뒤 클램프**한다. `-1.0`이 `Int16.min`에 정확히 대응해 전
+범위를 쓰며, `+1.0`이 `Int16.max`를 한 스텝 넘어가는 것은 클램프가 흡수한다. 클램프는 선택이 아니다:
+풀스케일을 넘는 샘플이 래핑되면 피크에서 부호가 뒤집혀 거친 잡음이 된다.
+
+### 6.5 누적 드리프트 주의
+
+`Frame Count`로부터 재생 시각을 계산할 때, 청크별 지속시간(마이크로초)을 더해 나가면 안 된다.
+44.1 kHz는 마이크로초로 정확히 나뉘지 않아 청크마다 절삭 오차가 남고(약 41 ppm, 10분에 약 25 ms),
+그만큼 립싱크가 밀린다. 재생 위치는 **누적 샘플 프레임 수**를 기준으로 산출한다.
+
+---
+
+## 7. 에러 코드 정의
 
 | 코드 | 이름 | 설명 |
 |------|------|------|
@@ -383,7 +458,7 @@ X, Y 좌표: 0.0 ~ 1.0 정규화 좌표 (가상 디스플레이 해상도 대비
 
 ---
 
-## 7. 타이밍 상수
+## 8. 타이밍 상수
 
 | 상수 | 값 | 설명 |
 |------|-----|------|
@@ -397,9 +472,9 @@ X, Y 좌표: 0.0 ~ 1.0 정규화 좌표 (가상 디스플레이 해상도 대비
 
 ---
 
-## 8. ADB 포트 포워딩 명령
+## 9. ADB 포트 포워딩 명령
 
-> **중요**: Mac이 **서버**(7100~7102 리슨)이고 Android가 `127.0.0.1:PORT`로 접속하는 **클라이언트**이므로,
+> **중요**: Mac이 **서버**(7100~7103 리슨)이고 Android가 `127.0.0.1:PORT`로 접속하는 **클라이언트**이므로,
 > `adb forward`(host→device)가 아니라 **`adb reverse`(device→host)** 를 사용한다. `adb forward`는 서버가 기기에 있을 때 쓰는 방향이라 이 구조에서는 연결되지 않는다.
 
 ```bash
@@ -407,11 +482,13 @@ X, Y 좌표: 0.0 ~ 1.0 정규화 좌표 (가상 디스플레이 해상도 대비
 adb reverse tcp:7100 tcp:7100   # Control
 adb reverse tcp:7101 tcp:7101   # Video
 adb reverse tcp:7102 tcp:7102   # Input
+adb reverse tcp:7103 tcp:7103   # Audio
 
 # reverse 터널 해제
 adb reverse --remove tcp:7100
 adb reverse --remove tcp:7101
 adb reverse --remove tcp:7102
+adb reverse --remove tcp:7103
 
 # 전체 해제
 adb reverse --remove-all
@@ -424,7 +501,7 @@ Android 클라이언트가 `127.0.0.1:PORT`로 연결하면, `adb reverse`가 �
 
 ---
 
-## 9. 성능 요구사항
+## 10. 성능 요구사항
 
 | 항목 | USB 목표 | Wi-Fi 목표 |
 |------|----------|------------|

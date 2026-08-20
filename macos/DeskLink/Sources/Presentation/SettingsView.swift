@@ -24,6 +24,7 @@ struct SettingsView: View {
                 .foregroundStyle(DesignTokens.textPrimary)
 
             permissionsSection
+            audioSection
             diagnosticsSection
             if showLogs {
                 logViewer
@@ -124,6 +125,35 @@ struct SettingsView: View {
             )
     }
 
+    // MARK: - Audio
+
+    private var audioSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            sectionTitle("Audio")
+            Toggle(isOn: audioBinding) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Play Mac audio on the tablet")
+                        .font(.plexSans(size: 14, weight: .medium))
+                        .foregroundStyle(DesignTokens.textPrimary)
+                    Text(audioDescription)
+                        .font(.plexSans(size: 12))
+                        .foregroundStyle(DesignTokens.textSecondary)
+                }
+            }
+            .toggleStyle(.switch)
+            .tint(DesignTokens.accentSolid)
+            .disabled(!viewModel.systemAudioCaptureSupported)
+        }
+    }
+
+    /// Spells out the consequence, because it is not obvious from the label: while this
+    /// is on and the tablet is connected, the Mac itself goes silent.
+    private var audioDescription: String {
+        viewModel.systemAudioCaptureSupported
+            ? "While connected, the Mac's speakers stay silent"
+            : "Requires macOS 14.2 or later"
+    }
+
     // MARK: - Diagnostics
 
     private var diagnosticsSection: some View {
@@ -195,6 +225,10 @@ struct SettingsView: View {
             RoundedRectangle(cornerRadius: DesignTokens.Radius.statsCard, style: .continuous)
                 .strokeBorder(DesignTokens.borderSubtle, lineWidth: 1)
         )
+    }
+
+    private var audioBinding: Binding<Bool> {
+        Binding(get: { viewModel.routeAudioToTablet }, set: { viewModel.routeAudioToTablet = $0 })
     }
 
     private var verboseBinding: Binding<Bool> {

@@ -25,4 +25,8 @@ object MessageType {
     const val TOUCH_BATCH: Byte = 0x21
     const val SCROLL: Byte = 0x22
     const val POINTER_BUTTON: Byte = 0x23
+
+    // Audio channel (0x30-0x3F)
+    const val AUDIO_CONFIG: Byte = 0x30
+    const val AUDIO_FRAME: Byte = 0x31
 }

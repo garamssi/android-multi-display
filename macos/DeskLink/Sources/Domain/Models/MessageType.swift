@@ -25,4 +25,8 @@ public enum MessageType: UInt8, Sendable {
     case touchBatch = 0x21
     case scroll = 0x22
     case pointerButton = 0x23
+
+    // Audio channel (0x30-0x3F)
+    case audioConfig = 0x30
+    case audioFrame = 0x31
 }

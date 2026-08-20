@@ -1,11 +1,13 @@
 package com.desklink.android.di
 
+import com.desklink.android.data.audio.AudioStreamRepositoryImpl
 import com.desklink.android.data.device.AndroidScreenMetricsProvider
 import com.desklink.android.data.device.ScreenMetricsProvider
 import com.desklink.android.data.device.UsbStateMonitorImpl
 import com.desklink.android.data.input.InputRepositoryImpl
 import com.desklink.android.data.network.ConnectionManagerImpl
 import com.desklink.android.data.video.VideoStreamRepositoryImpl
+import com.desklink.android.domain.repository.AudioStreamRepository
 import com.desklink.android.domain.repository.ConnectionRepository
 import com.desklink.android.domain.repository.InputRepository
 import com.desklink.android.domain.repository.UsbStateMonitor
@@ -43,6 +45,12 @@ abstract class AppModule {
     abstract fun bindVideoStreamRepository(
         impl: VideoStreamRepositoryImpl,
     ): VideoStreamRepository
+
+    @Binds
+    @Singleton
+    abstract fun bindAudioStreamRepository(
+        impl: AudioStreamRepositoryImpl,
+    ): AudioStreamRepository
 
     @Binds
     @Singleton

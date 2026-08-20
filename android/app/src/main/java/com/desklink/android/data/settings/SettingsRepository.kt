@@ -60,6 +60,17 @@ class SettingsRepository @Inject constructor(
     private val _naturalScroll = MutableStateFlow(DEFAULT_NATURAL_SCROLL)
     val naturalScroll: StateFlow<Boolean> = _naturalScroll.asStateFlow()
 
+    /**
+     * Whether to play the Mac's audio on this device. Like [scrollSensitivity] this is a
+     * local preference, not part of the negotiated [DisplayConfig].
+     *
+     * Defaults to ON: the Mac only sends audio when the user enabled routing there, so by
+     * the time a stream exists the intent is already established and refusing to play it
+     * would leave both machines silent.
+     */
+    private val _playMacAudio = MutableStateFlow(DEFAULT_PLAY_MAC_AUDIO)
+    val playMacAudio: StateFlow<Boolean> = _playMacAudio.asStateFlow()
+
     fun setResolution(width: Int, height: Int) =
         _config.update { it.copy(width = width, height = height) }
 
@@ -80,6 +91,10 @@ class SettingsRepository @Inject constructor(
 
     fun currentNaturalScroll(): Boolean = _naturalScroll.value
 
+    fun setPlayMacAudio(enabled: Boolean) = _playMacAudio.update { enabled }
+
+    fun currentPlayMacAudio(): Boolean = _playMacAudio.value
+
     companion object {
         const val MIN_SCROLL_SENSITIVITY = 1.0f
         const val MAX_SCROLL_SENSITIVITY = 6.0f
@@ -87,5 +102,7 @@ class SettingsRepository @Inject constructor(
         const val DEFAULT_SCROLL_SENSITIVITY = 3.0f
         /** Natural scrolling on by default (macOS default, current behavior). */
         const val DEFAULT_NATURAL_SCROLL = true
+
+        const val DEFAULT_PLAY_MAC_AUDIO = true
     }
 }

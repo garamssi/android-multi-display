@@ -28,6 +28,11 @@
     <!-- Menu-bar-only app: no Dock icon. -->
     <key>LSUIElement</key>
     <true/>
+    <!-- Shown in the TCC prompt the first time a Core Audio process tap is started.
+         Without this key the system-audio capture request is denied outright, so the
+         tablet would get no sound and the Mac would keep playing it. -->
+    <key>NSAudioCaptureUsageDescription</key>
+    <string>DeskLink needs to capture your Mac's audio so it can play through the connected tablet instead of the Mac's speakers.</string>
     <key>NSHumanReadableCopyright</key>
     <string>DeskLink</string>
 </dict>

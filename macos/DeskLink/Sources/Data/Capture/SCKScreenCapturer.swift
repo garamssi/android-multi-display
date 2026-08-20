@@ -148,6 +148,13 @@ private final class StreamOutput: NSObject, SCStreamOutput, SCStreamDelegate, @u
     private var frameCount = 0
     private var skippedCount = 0
 
+    /// Puts ScreenCaptureKit's presentation timestamps onto the shared audio/video
+    /// axis, verifying by measurement that they are already on it.
+    private var clockAligner = ClockDomainAligner()
+
+    /// Frames dropped for having no usable presentation timestamp.
+    private var untimedFrameCount = 0
+
     init(continuation: AsyncThrowingStream<VideoFrame, Error>.Continuation) {
         self.continuation = continuation
     }
@@ -171,9 +178,23 @@ private final class StreamOutput: NSObject, SCStreamOutput, SCStreamDelegate, @u
 
         guard let imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
 
-        // Timestamp in microseconds from the sample's presentation time.
+        // Timestamp on the shared audio/video axis, via the one integer-exact conversion
+        // both streams use. A frame with no usable presentation time is DROPPED rather
+        // than stamped 0: zero is a legal point on this axis (the boot instant), so a
+        // placeholder would be indistinguishable from a real stamp — and feeding it to
+        // the aligner would read as an uptime-sized epoch mismatch and corrupt every
+        // timestamp for the rest of the session. One dropped mirror frame is invisible.
         let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
-        let timestampUs = pts.isValid ? Int64(CMTimeGetSeconds(pts) * 1_000_000) : 0
+        guard let rawTimestampUs = MediaClock.microsFrom(pts) else {
+            untimedFrameCount += 1
+            if untimedFrameCount <= 3 {
+                Log.error(.capture, "capture: dropped frame with no presentation timestamp (#\(untimedFrameCount))")
+            }
+            return
+        }
+        let wasCalibrating = clockAligner.state == nil || clockAligner.isCalibrating
+        let timestampUs = clockAligner.align(rawTimestampUs: rawTimestampUs, nowUs: MediaClock.nowUs())
+        if wasCalibrating { logClockState() }
 
         CVPixelBufferLockBaseAddress(imageBuffer, .readOnly)
         defer { CVPixelBufferUnlockBaseAddress(imageBuffer, .readOnly) }
@@ -202,5 +223,19 @@ private final class StreamOutput: NSObject, SCStreamOutput, SCStreamDelegate, @u
 
     func stream(_ stream: SCStream, didStopWithError error: Error) {
         continuation.finish(throwing: error)
+    }
+
+    /// Logs the clock-alignment state while it is still being calibrated. A detected
+    /// epoch mismatch is logged at error level because the correction is then
+    /// load-bearing: without it audio and video sit on different epochs.
+    private func logClockState() {
+        switch clockAligner.state {
+        case .aligned(let latencyUs):
+            Log.debug(.capture, "capture clock: shares media clock (latency \(latencyUs) us)")
+        case .corrected(let offsetUs):
+            Log.error(.capture, "capture clock: different epoch from media clock, correcting by \(offsetUs) us")
+        case nil:
+            break
+        }
     }
 }

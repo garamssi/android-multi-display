@@ -15,6 +15,7 @@ public final class ServerCoordinator {
     private var controlServer = TCPServer()
     private var videoServer = TCPServer()
     private var inputServer = TCPServer()
+    private var audioServer = TCPServer()
 
     // Data-layer components.
     private let adbManager = ADBManager()
@@ -23,6 +24,16 @@ public final class ServerCoordinator {
     private var screenCapturer: any ScreenCapturing = SCKScreenCapturer()
     private let encoder = HEVCEncoder()
     private let injector = CGEventInjector()
+
+    /// The user's "play Mac audio on the tablet" choice. Read at each start so toggling
+    /// it takes effect on the next connection without restarting the app.
+    private let audioPreference = AudioOutputPreference()
+
+    /// Held so `stop()` can release the tap synchronously. Cancelling the streaming task
+    /// also releases it, but `stop()` does not await the cancelled tasks — and while a
+    /// tap is held the Mac's speakers are silent, so handing them back must not be left
+    /// to finish some time after the user asked the server to stop.
+    private var audioCapturer: (any AudioCapturing)?
 
     /// Control-channel task(s). Kept separate from the pipeline tasks so a resolution
     /// change can rebuild the video/input pipeline without dropping the control channel.
@@ -73,6 +84,7 @@ public final class ServerCoordinator {
         controlServer = TCPServer()
         videoServer = TCPServer()
         inputServer = TCPServer()
+        audioServer = TCPServer()
         screenCapturer = SCKScreenCapturer()
         for task in pipelineTasks { task.cancel() }
         pipelineTasks.removeAll()
@@ -106,11 +118,13 @@ public final class ServerCoordinator {
             try await controlServer.start(port: ProtocolConstants.portControl)
             try await videoServer.start(port: ProtocolConstants.portVideo)
             try await inputServer.start(port: ProtocolConstants.portInput)
+            try await audioServer.start(port: ProtocolConstants.portAudio)
         } catch {
             await portForwardingWatcher.stop()
             await controlServer.stop()
             await videoServer.stop()
             await inputServer.stop()
+            await audioServer.stop()
             // Match stop()'s teardown: if the watcher already applied `adb reverse`
             // before the bind failed, remove it so a failed start leaves nothing behind.
             try? await adbManager.removePortForwarding()
@@ -144,6 +158,31 @@ public final class ServerCoordinator {
             }
         )
         tasks.append(Task { try? await control.run() })
+
+        startAudioStreamingIfEnabled()
+    }
+
+    /// Wires the audio channel when the user has opted in.
+    ///
+    /// The loop only starts the tap once a client actually connects (see
+    /// `StreamAudioUseCase`), so having it running here costs nothing and does not mute
+    /// the Mac on its own. When the preference is off, no tap object is even created.
+    private func startAudioStreamingIfEnabled() {
+        guard audioPreference.routeToTablet else {
+            Log.info(.stream, "audio: routing to tablet is off; audio stays on the Mac")
+            return
+        }
+        guard #available(macOS 14.2, *) else {
+            // Process taps are the only way to capture system audio without leaving it
+            // playing on the Mac, and they do not exist before 14.2. Say so instead of
+            // silently mirroring the screen with no sound.
+            Log.error(.stream, "audio: needs macOS 14.2 or later; audio stays on the Mac")
+            return
+        }
+        let capturer = CoreAudioTapCapturer()
+        audioCapturer = capturer
+        let useCase = StreamAudioUseCase(capturer: capturer, streamServer: audioServer)
+        tasks.append(Task { try? await useCase.execute() })
     }
 
     // MARK: - Observability hooks (MainActor; UI-only)
@@ -227,7 +266,13 @@ public final class ServerCoordinator {
             displayManager: displayManager,
             screenCapturer: screenCapturer,
             encoder: encoder,
-            streamServer: videoServer
+            streamServer: videoServer,
+            onSharingEndedByUser: { [weak self] in
+                // The user pressed Stop Sharing in the system indicator. Tear the whole
+                // session down so audio stops with the picture and the menu returns to
+                // Start Server, instead of leaving a running server nobody can restart.
+                await self?.stop()
+            }
         )
         pipelineTasks.append(Task { try? await streaming.execute(config: config, displayID: displayID) })
     }
@@ -248,6 +293,13 @@ public final class ServerCoordinator {
         await inputServer.stop()
         await controlServer.stop()
         await videoServer.stop()
+        await audioServer.stop()
+        // Release the tap explicitly. `TCPServer.stop()` deliberately does not finish
+        // its connection stream (so the server can restart), so the streaming loop ends
+        // by task cancellation — which happens above but is not awaited. Calling this
+        // directly guarantees the Mac's speakers are back before `stop()` returns.
+        await audioCapturer?.stopCapture()
+        audioCapturer = nil
         await injector.stopReceiving()
         await screenCapturer.stopCapture()
         await displayManager.destroyDisplay()

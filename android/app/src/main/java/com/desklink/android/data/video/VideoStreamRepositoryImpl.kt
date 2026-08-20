@@ -56,6 +56,12 @@ class VideoStreamRepositoryImpl @Inject constructor(
         this.surface = surface
     }
 
+    override fun setFrameRenderedListener(
+        listener: ((serverTimestampUs: Long, localNanos: Long) -> Unit)?,
+    ) {
+        decoder.onFrameRendered = listener
+    }
+
     /**
      * Drains + renders all decoded frames ready this vsync. While there is no output
      * Surface (app backgrounded), skip it: releasing output buffers to a destroyed

@@ -7,6 +7,7 @@ object ProtocolConstants {
     const val PORT_CONTROL = 7100
     const val PORT_VIDEO = 7101
     const val PORT_INPUT = 7102
+    const val PORT_AUDIO = 7103
 
     // Packet limits
     const val MAX_PACKET_SIZE = 4 * 1024 * 1024 // 4MB

@@ -7,6 +7,7 @@ import androidx.lifecycle.viewModelScope
 import com.desklink.android.data.settings.SettingsRepository
 import com.desklink.android.domain.model.ConnectionState
 import com.desklink.android.domain.model.TouchEvent
+import com.desklink.android.domain.repository.AudioStreamRepository
 import com.desklink.android.domain.repository.ConnectionRepository
 import com.desklink.android.domain.repository.InputRepository
 import com.desklink.android.domain.repository.VideoStreamRepository
@@ -15,6 +16,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import javax.inject.Inject
@@ -27,6 +29,7 @@ import javax.inject.Inject
 @HiltViewModel
 class DisplayViewModel @Inject constructor(
     private val videoStream: VideoStreamRepository,
+    private val audioStream: AudioStreamRepository,
     private val inputRepository: InputRepository,
     private val connectionRepository: ConnectionRepository,
     private val sendTouchUseCase: SendTouchUseCase,
@@ -42,6 +45,7 @@ class DisplayViewModel @Inject constructor(
     val connectionState: StateFlow<ConnectionState> = connectionRepository.connectionState
 
     private var videoJob: Job? = null
+    private var audioJob: Job? = null
     private var started = false
 
     init {
@@ -83,6 +87,7 @@ class DisplayViewModel @Inject constructor(
     private fun restartVideoPipeline() {
         Log.i(TAG, "reconnect detected -> restarting video/input pipeline")
         videoJob?.cancel()
+        audioJob?.cancel()
         viewModelScope.launch {
             runCatching { videoStream.disconnect() }
             runCatching { inputRepository.disconnect() }
@@ -110,8 +115,15 @@ class DisplayViewModel @Inject constructor(
         // the decoder is rebuilt cleanly against the new Surface.
         Log.i(TAG, "onSurfaceDestroyed -> stopping video until resume")
         videoStream.setSurface(null)
+        videoStream.setFrameRenderedListener(null)
         videoJob?.cancel()
         videoJob = null
+        audioJob?.cancel()
+        audioJob = null
+        // Cancelling the job releases the AudioTrack; the socket must be closed as well,
+        // because that is the signal that makes the Mac drop its tap. Leaving it open
+        // while backgrounded strands the server mid-send and silences both machines.
+        viewModelScope.launch { runCatching { audioStream.disconnect() } }
         started = false
     }
 
@@ -121,12 +133,44 @@ class DisplayViewModel @Inject constructor(
     private fun startStreaming() {
         val config = settingsRepository.current()
         Log.i(TAG, "startStreaming config=${config.width}x${config.height} codec=${config.codec}")
+        // Close the lip-sync loop: rendered frames are the audio path's time reference.
+        videoStream.setFrameRenderedListener(audioStream::noteVideoRendered)
         videoJob = viewModelScope.launch {
             // Input channel connects alongside the video stream.
             runCatching { inputRepository.connect() }
                 .onFailure { Log.e(TAG, "input channel connect failed", it) }
             videoStream.connect(config).collect { event ->
                 Log.i(TAG, "video event: $event")
+            }
+        }
+        startAudioStreaming()
+    }
+
+    /**
+     * Connects the audio channel in its OWN job, and follows the preference while the
+     * session runs.
+     *
+     * Kept separate from the video job on purpose: audio is optional, and a Mac that
+     * never opens port 7103 (routing disabled, or macOS older than 14.2) must not take
+     * the mirror down with it. Failures here are logged and mirroring continues silently.
+     *
+     * The preference is COLLECTED rather than read once, so turning audio off mid-session
+     * stops it immediately — a user reaching for that toggle wants the sound to stop now,
+     * not after a reconnect.
+     */
+    private fun startAudioStreaming() {
+        audioJob = viewModelScope.launch {
+            settingsRepository.playMacAudio.collectLatest { enabled ->
+                if (!enabled) {
+                    Log.i(TAG, "audio playback disabled by preference")
+                    runCatching { audioStream.disconnect() }
+                    return@collectLatest
+                }
+                runCatching {
+                    audioStream.connect().collect { event ->
+                        Log.i(TAG, "audio event: $event")
+                    }
+                }.onFailure { Log.e(TAG, "audio channel unavailable; continuing without sound", it) }
             }
         }
     }
@@ -195,6 +239,9 @@ class DisplayViewModel @Inject constructor(
     fun teardown() {
         videoJob?.cancel()
         videoJob = null
+        audioJob?.cancel()
+        audioJob = null
+        videoStream.setFrameRenderedListener(null)
         started = false
         viewModelScope.launch {
             // Run the actual teardown in NonCancellable. teardown() is called from the
@@ -216,6 +263,11 @@ class DisplayViewModel @Inject constructor(
             withContext(NonCancellable) {
                 runCatching { videoStream.disconnect() }
                 runCatching { inputRepository.disconnect() }
+                // Closing the audio SOCKET is what makes the Mac release its tap and get
+                // its own speakers back. Cancelling the job alone only stops playback here
+                // and leaves the server streaming into a connection nobody reads, which
+                // ends with both machines silent.
+                runCatching { audioStream.disconnect() }
                 // Also close the CONTROL channel so connectionState becomes Disconnected;
                 // otherwise the Connection screen still sees "Connected" and immediately
                 // bounces back to Display (black screen). This also stops auto-reconnect.

@@ -2,7 +2,7 @@
 
 이 문서는 DeskLink(맥 서버 ↔ 안드로이드 클라이언트, 확장 디스플레이)를 빌드하고, 각 기기에 설치하고, 테스트하는 방법을 정리한다.
 
-> 아키텍처 요약: **Mac = 서버**(가상 디스플레이 캡처 → HEVC 인코딩 → 전송, 포트 7100/7101/7102 리슨). **Android = 클라이언트**(수신 → 디코딩 → 확장 화면 렌더 → 터치 역전송). 우선 연결 모드는 **USB(ADB reverse 터널)**.
+> 아키텍처 요약: **Mac = 서버**(가상 디스플레이 캡처 → HEVC 인코딩 → 전송, 포트 7100~7103 리슨). **Android = 클라이언트**(수신 → 디코딩 → 확장 화면 렌더 → 터치 역전송). 우선 연결 모드는 **USB(ADB reverse 터널)**.
 
 ---
 
@@ -29,8 +29,16 @@
   ```
   - 주의: build.gradle.kts의 `jvmTarget = 17`은 "출력 바이트코드 목표"이지, 설치할 JDK 버전이 아니다. 진짜 중요한 건 **Gradle을 실행하는 JDK**다.
   - 이 프로젝트는 **Gradle 8.11.1**을 쓰며, Gradle 8.x는 **JDK 25를 지원하지 않는다**(JDK 25 실행은 Gradle 9.1.0+ 필요). 따라서 시스템 JDK가 25여도 아래 중 하나로 17/21을 지정해야 한다:
-    - Android Studio: Settings → Build, Execution, Deployment → Build Tools → Gradle → **Gradle JDK**를 17 또는 21로. (스튜디오 내장 JDK 사용 시 시스템 JDK가 25여도 대개 문제없음)
+    - Android Studio: Settings → Build, Execution, Deployment → Build Tools → Gradle → **Gradle JDK**를 17 또는 21로.
     - 터미널: `brew install --cask temurin@17` 후 `export JAVA_HOME=$(/usr/libexec/java_home -v 17)`.
+  - `android/gradle.properties`의 `org.gradle.java.home`이 JDK 21을 **절대 경로로 고정**한다.
+    다른 머신에서는 이 값을 자신의 JDK 21 경로로 바꿔야 한다.
+  - 이 값이 예전에는 Android Studio 번들 JBR을 가리켰는데, 스튜디오 업데이트로 그 JBR이 JDK 25가
+    되면서 로컬 변경 없이 빌드가 깨졌다. 증상은 `What went wrong: 25.0.2` 한 줄뿐이고 실제 원인은
+    Kotlin 2.1.0에 번들된 IntelliJ `JavaVersion.parse`가 "25.x" 문자열에서
+    `IllegalArgumentException`을 던지는 것이다. 그래서 지금은 실제 JDK 21을 직접 가리킨다.
+  - `android/local.properties`(gitignore 대상)에 SDK 경로가 필요하다:
+    `sdk.dir=$HOME/Library/Android/sdk`.
 - **Android SDK (API 35)** + build-tools. **Android Studio**(최신) 사용을 권장.
 - Gradle은 별도 설치 불필요 — 저장소의 Gradle Wrapper(`gradlew`)가 Gradle 8.11.1을 자동 내려받는다.
 
@@ -146,6 +154,7 @@ macOS 서버 앱은 시작 시 아래 reverse 터널을 **자동 설정**한다(
 adb reverse tcp:7100 tcp:7100   # Control
 adb reverse tcp:7101 tcp:7101   # Video
 adb reverse tcp:7102 tcp:7102   # Input
+adb reverse tcp:7103 tcp:7103   # Audio
 
 adb reverse --list              # 터널 확인
 adb reverse --remove-all        # 전체 해제
@@ -153,7 +162,7 @@ adb reverse --remove-all        # 전체 해제
 이후 Android 앱의 연결 화면에서 호스트를 `127.0.0.1`(localhost)로 두고 연결한다.
 
 ### Wi-Fi 모드 (대안)
-같은 네트워크에서 Android 앱의 호스트에 **Mac의 IP 주소**를 입력해 연결한다(포트 7100~7102). adb 터널은 불필요. USB 대비 지연이 크다(스펙 목표 ≤60ms).
+같은 네트워크에서 Android 앱의 호스트에 **Mac의 IP 주소**를 입력해 연결한다(포트 7100~7103). adb 터널은 불필요. USB 대비 지연이 크다(스펙 목표 ≤60ms).
 
 ---
 
@@ -194,7 +203,12 @@ cd android
 ./gradlew testDebugUnitTest     # 디버그 변형만
 ```
 리포트: `android/app/build/reports/tests/testDebugUnitTest/index.html`.
-커버리지: 프레이밍 경계값(`PacketFramerTest`), 터치 골든 벡터(`TouchSerializerTest`), TCP 재조립(`TCPClientReframingTest`), 디코더 상태·프레임 무손실(`HEVCDecoderTest`), 비디오 파서(`VideoProtocolTest`), keepalive 타임아웃(`KeepAliveControllerTest`), 연결 상태 전이·핸드셰이크 타임아웃(`ConnectionManagerImplTest`), 설정→연결 배선(`ConnectionWiringTest`).
+커버리지: 프레이밍 경계값(`PacketFramerTest`), 터치 골든 벡터(`TouchSerializerTest`), TCP 재조립(`TCPClientReframingTest`), 디코더 상태·프레임 무손실(`HEVCDecoderTest`), 비디오 파서(`VideoProtocolTest`), keepalive 타임아웃(`KeepAliveControllerTest`), 연결 상태 전이·핸드셰이크 타임아웃(`ConnectionManagerImplTest`), 설정→연결 배선(`ConnectionWiringTest`), 오디오 파서·골든 벡터(`AudioProtocolTest`), 립싱크 결정 로직(`AvSyncCoordinatorTest`), 재생 시각 예측(`PlayoutPredictorTest`).
+
+> 알려진 실패: `ConnectionManagerImplTest > losing an established connection retries then gives up with Error LOST`.
+> 재연결 시도가 모두 실패했는데도 상태가 `Connected`로 남아 기대값 `Error(LOST)`와 어긋난다.
+> 오디오 작업과 무관한 기존 결함이며(모든 오디오 변경을 stash한 상태에서도 동일하게 실패), 결정론적으로
+> 재현된다. 그동안 CLI 빌드가 JBR 25 문제로 아예 실행되지 않아 드러나지 않았다.
 
 ### 8.4 정적 분석 (선택)
 ```bash
@@ -213,6 +227,19 @@ cd android && ./gradlew lint    # Android Lint 리포트
 - SC-8 권한 없음 처리(명시적 에러)
 - SC-9 정상 종료(자원 해제, 누수 없음)
 
+**오디오 (SC-A1 ~ SC-A5, 서명된 .app 필요)**
+
+오디오 캡처는 TCC 승인을 요구하므로 반드시 서명된 `.app`으로 실행해야 한다. `swift test`로는 검증할 수 없다.
+
+- SC-A1 맥 Settings → Audio → "Play Mac audio on the tablet" 켜기 → Start Server → 첫 실행 시
+  오디오 캡처 권한 프롬프트 허용 → 맥에서 소리를 재생 → **태블릿에서만** 들리고 맥 스피커는 무음일 것.
+- SC-A2 립싱크: 영상에 말하는 사람이 있는 콘텐츠로 입 모양과 소리가 맞는지 확인.
+- SC-A3 태블릿 앱 Settings → "Mac audio"를 Off로 → 태블릿이 오디오 채널을 열지 않으므로 소리가 나지
+  않는다. 이때 맥도 무음이 아니라 정상 재생으로 돌아와야 한다(탭은 읽는 동안만 뮤트).
+- SC-A4 Stop Server 또는 케이블 분리 → 맥 스피커가 즉시 복구될 것.
+- SC-A5 스트리밍 중 헤드폰/블루투스 이어폰 연결 → 기본 출력 장치가 바뀌면 캡처가 재시작되고
+  오디오가 복구될 것(조용히 죽지 않아야 한다).
+
 ---
 
 ## 9. 문제 해결 (Troubleshooting)
@@ -226,7 +253,12 @@ cd android && ./gradlew lint    # Android Lint 리포트
 | 터치가 반응 없음 | 손쉬운 사용 권한 미부여 | 시스템 설정 → 손쉬운 사용에서 DeskLink 허용(에러 1301) |
 | 권한이 재빌드 후 초기화 | 미서명 실행 파일 | Xcode App 타깃으로 감싸 서명(§3.3) |
 | Gradle sync 실패 | JDK 17 아님 | JDK 17 설치·지정 |
-| 포트 충돌(7100~7102) | 다른 프로세스 점유 | `lsof -i :7100` 확인 후 종료 |
+| 포트 충돌(7100~7103) | 다른 프로세스 점유 | `lsof -i :7100` 확인 후 종료 |
+| 태블릿에서 소리가 안 남 | 맥 쪽 오디오 라우팅 꺼짐, 또는 태블릿 "Mac audio" Off | 맥 Settings → Audio 토글, 태블릿 Settings → Mac audio |
+| 맥과 태블릿에서 소리가 동시에 남 | 프로세스 탭이 생성되지 못함(권한 거부 등) | Console에서 `subsystem == "com.desklink.mac"` 로그 확인. 시스템 설정 → 개인정보 보호 → 오디오 녹음에서 DeskLink 허용 |
+| `AudioDeviceStart failed with status 268451843` | 오디오 캡처 TCC 승인 없음(서명 안 된 바이너리) | 서명된 `.app`으로 실행. `swift test`에서는 정상적으로 실패한다 |
+| 오디오가 macOS 14.1 이하에서 안 됨 | 프로세스 탭 API가 14.2+ | 토글이 비활성으로 표시된다. 업그레이드 외 방법 없음 |
+| 오디오가 도중에 조용해짐 | 기본 출력 장치 변경(헤드폰 연결) | 캡처가 자동 재시작된다. 반복되면 `.adb`/`.capture` 로그 확인 |
 
 ---
 

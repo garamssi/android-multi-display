@@ -27,14 +27,16 @@ class SettingsViewModel @Inject constructor(
             settingsRepository.config,
             settingsRepository.scrollSensitivity,
             settingsRepository.naturalScroll,
-        ) { config, sensitivity, naturalScroll ->
-            config.toUiState(sensitivity, naturalScroll)
+            settingsRepository.playMacAudio,
+        ) { config, sensitivity, naturalScroll, playMacAudio ->
+            config.toUiState(sensitivity, naturalScroll, playMacAudio)
         }.stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5_000),
             initialValue = settingsRepository.current().toUiState(
                 settingsRepository.currentScrollSensitivity(),
                 settingsRepository.currentNaturalScroll(),
+                settingsRepository.currentPlayMacAudio(),
             ),
         )
 
@@ -54,10 +56,16 @@ class SettingsViewModel @Inject constructor(
 
     fun setNaturalScroll(enabled: Boolean) = settingsRepository.setNaturalScroll(enabled)
 
+    fun setPlayMacAudio(enabled: Boolean) = settingsRepository.setPlayMacAudio(enabled)
+
     /** The current user selection as a [DisplayConfig] (used by the connect flow). */
     fun toDisplayConfig(): DisplayConfig = settingsRepository.current()
 
-    private fun DisplayConfig.toUiState(scrollSensitivity: Float, naturalScroll: Boolean) = SettingsUiState(
+    private fun DisplayConfig.toUiState(
+        scrollSensitivity: Float,
+        naturalScroll: Boolean,
+        playMacAudio: Boolean,
+    ) = SettingsUiState(
         width = width,
         height = height,
         fps = fps,
@@ -67,6 +75,7 @@ class SettingsViewModel @Inject constructor(
         nativeHeight = nativeHeight,
         scrollSensitivity = scrollSensitivity,
         naturalScroll = naturalScroll,
+        playMacAudio = playMacAudio,
     )
 }
 
@@ -80,11 +89,18 @@ data class SettingsUiState(
     val nativeHeight: Int = DisplayConfig().nativeHeight,
     val scrollSensitivity: Float = 3.0f,
     val naturalScroll: Boolean = true,
+    val playMacAudio: Boolean = SettingsRepository.DEFAULT_PLAY_MAC_AUDIO,
 ) {
     /** True when the current streaming resolution equals the device's native size. */
     val isNativeSelected: Boolean get() = width == nativeWidth && height == nativeHeight
 
     companion object {
+        /** Options for the "Mac audio" control. */
+        val AUDIO_OPTIONS = listOf(
+            AudioOption(enabled = true, label = "Play here"),
+            AudioOption(enabled = false, label = "Off"),
+        )
+
         /** Fixed resolution presets shown below the dynamic "Native" option. */
         val RESOLUTION_PRESETS = listOf(
             2560 to 1600,
@@ -124,3 +140,6 @@ data class ScrollSpeedOption(val sensitivity: Float, val label: String)
 
 /** A selectable scroll-direction preset with a human label. */
 data class ScrollDirectionOption(val natural: Boolean, val label: String)
+
+/** One choice in the "Mac audio" control. */
+data class AudioOption(val enabled: Boolean, val label: String)
