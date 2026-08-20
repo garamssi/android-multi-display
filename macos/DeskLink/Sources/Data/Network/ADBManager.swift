@@ -19,6 +19,10 @@ public final class ADBManager: ADBManaging, @unchecked Sendable {
     private let lock = NSLock()
     private var isForwarding = false
 
+    /// Guards against logging the same persistent adb-invocation failure on every
+    /// one-second device poll. Cleared as soon as a probe succeeds.
+    private var didLogProbeFailure = false
+
     private let statusStream: AsyncStream<Bool>
     private let statusContinuation: AsyncStream<Bool>.Continuation
 
@@ -31,6 +35,7 @@ public final class ADBManager: ADBManaging, @unchecked Sendable {
         (ProtocolConstants.portControl, ProtocolConstants.portControl),
         (ProtocolConstants.portVideo, ProtocolConstants.portVideo),
         (ProtocolConstants.portInput, ProtocolConstants.portInput),
+        (ProtocolConstants.portAudio, ProtocolConstants.portAudio),
     ]
 
     public var deviceStatusChanges: AsyncStream<Bool> {
@@ -68,12 +73,39 @@ public final class ADBManager: ADBManaging, @unchecked Sendable {
     }
 
     public func isDeviceConnected() async -> Bool {
-        guard let result = try? await runADB("devices") else { return false }
+        let result: ADBResult
+        do {
+            result = try await runADB("devices")
+        } catch {
+            // The watcher polls this once a second, so report a persistent failure
+            // (typically adb not installed / not on any known path) exactly once
+            // instead of flooding the log — but never swallow it silently, because
+            // it is the difference between "no device" and "we cannot ask".
+            logProbeFailureOnce(error)
+            return false
+        }
+        clearProbeFailureLog()
         // A connected device line looks like: "<serial>\tdevice"
         let lines = result.output.split(separator: "\n")
         return lines.contains { line in
             line.contains("\tdevice") && !line.contains("List of")
         }
+    }
+
+    // MARK: - Failure reporting
+
+    private func logProbeFailureOnce(_ error: Error) {
+        let shouldLog = lock.withLock {
+            guard !didLogProbeFailure else { return false }
+            didLogProbeFailure = true
+            return true
+        }
+        guard shouldLog else { return }
+        Log.error(.adb, "cannot query devices: \(error)")
+    }
+
+    private func clearProbeFailureLog() {
+        lock.withLock { didLogProbeFailure = false }
     }
 
     // MARK: - Private
@@ -82,8 +114,6 @@ public final class ADBManager: ADBManaging, @unchecked Sendable {
         let exitCode: Int32
         let output: String
     }
-
-    private static let adbPaths = ["/opt/homebrew/bin/adb", "/usr/local/bin/adb"]
 
     private func runADB(_ arguments: String...) async throws -> ADBResult {
         let args = arguments
@@ -102,37 +132,37 @@ public final class ADBManager: ADBManaging, @unchecked Sendable {
     /// Runs adb synchronously on the dedicated queue. Drains stdout+stderr to EOF
     /// before waiting for exit to avoid pipe-buffer deadlock.
     private static func runADBBlocking(arguments: [String]) throws -> ADBResult {
-        for path in adbPaths {
-            guard FileManager.default.isExecutableFile(atPath: path) else { continue }
-
-            let process = Process()
-            let stdoutPipe = Pipe()
-            let stderrPipe = Pipe()
-            process.executableURL = URL(fileURLWithPath: path)
-            process.arguments = arguments
-            process.standardOutput = stdoutPipe
-            process.standardError = stderrPipe
-
-            do {
-                try process.run()
-            } catch {
-                continue // Try next path
-            }
-
-            // Drain both pipes to EOF BEFORE waitUntilExit. readDataToEndOfFile
-            // blocks until the write end closes (child exits), which prevents the
-            // child from stalling on a full pipe while we wait on exit.
-            let outData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
-            let errData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
-
-            process.waitUntilExit()
-
-            var output = String(data: outData, encoding: .utf8) ?? ""
-            if output.isEmpty {
-                output = String(data: errData, encoding: .utf8) ?? ""
-            }
-            return ADBResult(exitCode: process.terminationStatus, output: output)
+        guard let adbPath = ADBLocator.resolve() else {
+            throw ADBError.executableNotFound(
+                searched: ADBLocator.candidatePaths(
+                    environment: ProcessInfo.processInfo.environment,
+                    homeDirectory: NSHomeDirectory()
+                )
+            )
         }
-        throw ConnectionError.refused
+
+        let process = Process()
+        let stdoutPipe = Pipe()
+        let stderrPipe = Pipe()
+        process.executableURL = URL(fileURLWithPath: adbPath)
+        process.arguments = arguments
+        process.standardOutput = stdoutPipe
+        process.standardError = stderrPipe
+
+        try process.run()
+
+        // Drain both pipes to EOF BEFORE waitUntilExit. readDataToEndOfFile blocks
+        // until the write end closes (child exits), which prevents the child from
+        // stalling on a full pipe while we wait on exit.
+        let outData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
+        let errData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+
+        process.waitUntilExit()
+
+        var output = String(data: outData, encoding: .utf8) ?? ""
+        if output.isEmpty {
+            output = String(data: errData, encoding: .utf8) ?? ""
+        }
+        return ADBResult(exitCode: process.terminationStatus, output: output)
     }
 }

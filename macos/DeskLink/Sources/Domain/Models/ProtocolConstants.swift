@@ -7,6 +7,7 @@ public enum ProtocolConstants {
     public static let portControl: UInt16 = 7100
     public static let portVideo: UInt16 = 7101
     public static let portInput: UInt16 = 7102
+    public static let portAudio: UInt16 = 7103
 
     // Packet limits
     public static let maxPacketSize = 4 * 1024 * 1024 // 4MB
