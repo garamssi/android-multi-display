@@ -1,14 +1,23 @@
 package com.desklink.android.presentation
 
+import com.desklink.android.data.FakeSettingsStore
 import com.desklink.android.data.device.ScreenMetricsProvider
 import com.desklink.android.data.device.ScreenResolution
 import com.desklink.android.data.settings.SettingsRepository
+import com.desklink.android.data.settings.SettingsStore
 import com.desklink.android.domain.model.DisplayConfig
+import com.desklink.android.domain.model.TransportMode
+import com.desklink.android.domain.transport.DiscoveredServer
+import com.desklink.android.domain.transport.PeerDiscovery
 import com.desklink.android.presentation.settings.SettingsViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -17,24 +26,35 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 
-/**
- * Unit tests for the Settings option -> DisplayConfig mapping and for the
- * native-resolution detection wired through an injected [ScreenMetricsProvider].
- */
 @OptIn(ExperimentalCoroutinesApi::class)
 class SettingsViewModelTest {
 
     private val dispatcher = StandardTestDispatcher()
 
-    private fun repository(nativeWidth: Int = 2560, nativeHeight: Int = 1600) =
+    private fun repository(
+        nativeWidth: Int = 2560,
+        nativeHeight: Int = 1600,
+        store: SettingsStore = FakeSettingsStore(),
+    ) =
         SettingsRepository(
             object : ScreenMetricsProvider {
                 override fun nativeResolution() = ScreenResolution(nativeWidth, nativeHeight)
             },
+            store,
         )
 
-    private fun viewModel(nativeWidth: Int = 2560, nativeHeight: Int = 1600): SettingsViewModel =
-        SettingsViewModel(repository(nativeWidth, nativeHeight))
+    private class FakeDiscovery(
+        private val flow: Flow<List<DiscoveredServer>> = flowOf(emptyList()),
+    ) : PeerDiscovery {
+        override fun servers(): Flow<List<DiscoveredServer>> = flow
+    }
+
+    private fun viewModel(
+        nativeWidth: Int = 2560,
+        nativeHeight: Int = 1600,
+        discovery: PeerDiscovery = FakeDiscovery(),
+    ): SettingsViewModel =
+        SettingsViewModel(repository(nativeWidth, nativeHeight), discovery)
 
     @BeforeEach
     fun setUp() {
@@ -74,7 +94,6 @@ class SettingsViewModelTest {
         assertEquals(30, config.fps)
         assertEquals(10_000, config.bitrateKbps)
         assertEquals(DisplayConfig.Codec.H264, config.codec)
-        // Native size is preserved even after choosing a smaller streaming resolution.
         assertEquals(2560, config.nativeWidth)
         assertEquals(1600, config.nativeHeight)
         assertFalse(config.width == config.nativeWidth && config.height == config.nativeHeight)
@@ -132,5 +151,121 @@ class SettingsViewModelTest {
 
         repo.setNaturalScroll(true)
         assertTrue(repo.currentNaturalScroll())
+    }
+
+    @Test
+    fun `touch input defaults to on`() {
+        val vm = viewModel()
+        assertTrue(vm.uiState.value.touchInputEnabled)
+        assertTrue(SettingsRepository.DEFAULT_TOUCH_INPUT_ENABLED)
+        assertTrue(repository().currentTouchInputEnabled())
+    }
+
+    @Test
+    fun `setTouchInputEnabled toggles and persists across restart`() {
+        val store = FakeSettingsStore()
+        val repo = repository(store = store)
+
+        repo.setTouchInputEnabled(false)
+        assertFalse(repo.currentTouchInputEnabled())
+
+        assertFalse(repository(store = store).currentTouchInputEnabled())
+    }
+
+    @Test
+    fun `display rotation defaults to landscape 0 and persists`() {
+        val store = FakeSettingsStore()
+        val repo = repository(store = store)
+        assertEquals(com.desklink.android.domain.model.DisplayRotation.ROTATION_0, repo.currentDisplayRotation())
+
+        repo.setDisplayRotation(com.desklink.android.domain.model.DisplayRotation.ROTATION_270)
+        assertEquals(
+            com.desklink.android.domain.model.DisplayRotation.ROTATION_270,
+            repo.currentDisplayRotation(),
+        )
+        assertEquals(
+            com.desklink.android.domain.model.DisplayRotation.ROTATION_270,
+            repository(store = store).currentDisplayRotation(),
+        )
+    }
+
+    @Test
+    fun `transport defaults to USB with no manual host`() {
+        val vm = viewModel()
+        assertEquals(TransportMode.USB, vm.uiState.value.transportMode)
+        assertEquals("", vm.uiState.value.manualHost)
+        assertEquals(SettingsRepository.DEFAULT_TRANSPORT_MODE, repository().currentTransportMode())
+    }
+
+    @Test
+    fun `view model transport setters delegate to the repository and trim the host`() {
+        val repo = repository()
+        val vm = SettingsViewModel(repo, FakeDiscovery())
+
+        vm.setTransportMode(TransportMode.LAN)
+        vm.setManualHost("  192.168.1.20  ")
+
+        assertEquals(TransportMode.LAN, repo.currentTransportMode())
+        assertEquals("192.168.1.20", repo.currentManualHost())
+    }
+
+    @Test
+    fun `startDiscovery publishes discovered servers and selecting one sets the manual host`() = runTest {
+        val repo = repository()
+        val found = DiscoveredServer(name = "Garam's Mac", host = "192.168.0.5", port = 7100)
+        val vm = SettingsViewModel(repo, FakeDiscovery(flowOf(listOf(found))))
+
+        vm.startDiscovery()
+        advanceUntilIdle()
+        assertEquals(listOf(found), vm.discoveredServers.value)
+
+        vm.selectDiscoveredServer(found)
+        assertEquals("192.168.0.5", repo.currentManualHost())
+    }
+
+    @Test
+    fun `settings persist across repository instances via the store`() {
+        val store = FakeSettingsStore()
+        val first = repository(store = store)
+        first.setTransportMode(TransportMode.LAN)
+        first.setManualHost("  192.168.0.5  ")
+        first.setScrollSensitivity(5.0f)
+        first.setNaturalScroll(false)
+        first.setResolution(1920, 1200)
+        first.setCodec(DisplayConfig.Codec.H264)
+
+        val restarted = repository(store = store)
+        assertEquals(TransportMode.LAN, restarted.currentTransportMode())
+        assertEquals("192.168.0.5", restarted.currentManualHost())
+        assertEquals(5.0f, restarted.currentScrollSensitivity())
+        assertFalse(restarted.currentNaturalScroll())
+        assertEquals(1920, restarted.current().width)
+        assertEquals(1200, restarted.current().height)
+        assertEquals(DisplayConfig.Codec.H264, restarted.current().codec)
+    }
+
+    @Test
+    fun `setPairingPin keeps only digits capped at the PIN length and persists`() {
+        val store = FakeSettingsStore()
+        val repo = repository(store = store)
+
+        repo.setPairingPin("12ab34-56789")
+
+        assertEquals("123456", repo.currentPairingPin()) // digits only, capped at 6
+        assertEquals("123456", repository(store = store).currentPairingPin())
+    }
+
+    @Test
+    fun `stopDiscovery clears the discovered list`() = runTest {
+        val vm = viewModel(discovery = FakeDiscovery(flowOf(listOf(
+            DiscoveredServer("Mac", "10.0.0.2", 7100),
+        ))))
+
+        vm.startDiscovery()
+        advanceUntilIdle()
+        assertTrue(vm.discoveredServers.value.isNotEmpty())
+
+        vm.stopDiscovery()
+        assertTrue(vm.discoveredServers.value.isEmpty())
     }
 }

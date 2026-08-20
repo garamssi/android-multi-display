@@ -4,22 +4,16 @@
 
 NSErrorDomain const VirtualDisplayBridgeErrorDomain = @"com.desklink.VirtualDisplayBridge";
 
-// Typed declaration of the private CGVirtualDisplay initializer. Casting the
-// allocated instance to this protocol lets ARC treat -initWithDescriptor: as a
-// real init-family method with correct ownership, so we call it directly instead
-// of via dynamic performSelector:. This removes the root cause of the ARC
-// "performSelector may cause a leak" warning rather than suppressing it.
+// Typed init-family declaration so ARC gives -initWithDescriptor: correct ownership (avoids performSelector and its ARC leak warning).
 @protocol DLKVirtualDisplayInit <NSObject>
 - (instancetype)initWithDescriptor:(id)descriptor;
 @end
 
-// The private CGVirtualDisplayMode initializer takes primitive args, so a typed
-// declaration is required (performSelector: cannot pass scalars).
+// Typed declaration required: this initializer takes scalars, which performSelector: cannot pass.
 @protocol DLKVirtualDisplayMode <NSObject>
 - (instancetype)initWithWidth:(uint32_t)width height:(uint32_t)height refreshRate:(double)refreshRate;
 @end
 
-// The private -applySettings: on CGVirtualDisplay.
 @protocol DLKVirtualDisplayApply <NSObject>
 - (BOOL)applySettings:(id)settings;
 @end
@@ -45,8 +39,7 @@ NSErrorDomain const VirtualDisplayBridgeErrorDomain = @"com.desklink.VirtualDisp
     [self destroyDisplay];
 }
 
-/// Sets a KVC value, ignoring the exception if the key is absent on this macOS
-/// version (private-API property names can vary between releases).
+// KVC set that ignores an absent key: private-API property names vary between macOS versions.
 - (void)trySetValue:(id)value forKey:(NSString *)key on:(id)object {
     @try {
         [object setValue:value forKey:key];
@@ -79,7 +72,6 @@ NSErrorDomain const VirtualDisplayBridgeErrorDomain = @"com.desklink.VirtualDisp
         return NO;
     }
 
-    // Load CGVirtualDisplayDescriptor class (private API)
     Class descriptorClass = NSClassFromString(@"CGVirtualDisplayDescriptor");
     if (!descriptorClass) {
         if (error) {
@@ -91,7 +83,6 @@ NSErrorDomain const VirtualDisplayBridgeErrorDomain = @"com.desklink.VirtualDisp
         return NO;
     }
 
-    // Load CGVirtualDisplay class (private API)
     Class displayClass = NSClassFromString(@"CGVirtualDisplay");
     if (!displayClass) {
         if (error) {
@@ -103,14 +94,9 @@ NSErrorDomain const VirtualDisplayBridgeErrorDomain = @"com.desklink.VirtualDisp
         return NO;
     }
 
-    // Create descriptor
     _displayDescriptor = [[descriptorClass alloc] init];
 
-    // Configure the descriptor. These are private-API KVC properties; the correct
-    // keys are name / maxPixelsWide / maxPixelsHigh / sizeInMillimeters / queue.
-    // (The actual resolution is applied afterwards via a CGVirtualDisplayMode.)
-    // Wrapped in @try so an unknown key on a given macOS version returns an NSError
-    // instead of terminating the app with an uncaught NSException.
+    // Private-API KVC keys; @try so an unknown key on some macOS version returns an NSError instead of crashing.
     @try {
         dispatch_queue_t queue = dispatch_queue_create("com.desklink.virtualdisplay", DISPATCH_QUEUE_SERIAL);
         [_displayDescriptor setValue:(name ?: @"DeskLink Display") forKey:@"name"];
@@ -118,13 +104,11 @@ NSErrorDomain const VirtualDisplayBridgeErrorDomain = @"com.desklink.VirtualDisp
         [_displayDescriptor setValue:@(height) forKey:@"maxPixelsHigh"];
         [_displayDescriptor setValue:queue forKey:@"queue"];
 
-        // Physical size in millimeters (from pixels and PPI; 1 inch = 25.4mm).
         double widthMM = (double)width / (double)ppi * 25.4;
         double heightMM = (double)height / (double)ppi * 25.4;
         [_displayDescriptor setValue:[NSValue valueWithSize:NSMakeSize(widthMM, heightMM)]
                               forKey:@"sizeInMillimeters"];
 
-        // Best-effort identifiers (ignored if the key is absent on this version).
         [self trySetValue:@(0x444C) forKey:@"productID" on:_displayDescriptor];
         [self trySetValue:@(0x444B) forKey:@"vendorID" on:_displayDescriptor];
         [self trySetValue:@(0x0001) forKey:@"serialNum" on:_displayDescriptor];
@@ -140,9 +124,6 @@ NSErrorDomain const VirtualDisplayBridgeErrorDomain = @"com.desklink.VirtualDisp
         return NO;
     }
 
-    // Create the virtual display via the private -initWithDescriptor:. Casting the
-    // allocated instance to DLKVirtualDisplayInit gives ARC a real init-family
-    // signature (correct ownership), so no performSelector: is needed.
     id<DLKVirtualDisplayInit> allocated = [displayClass alloc];
     _virtualDisplay = [allocated initWithDescriptor:_displayDescriptor];
 
@@ -156,34 +137,48 @@ NSErrorDomain const VirtualDisplayBridgeErrorDomain = @"com.desklink.VirtualDisp
         return NO;
     }
 
-    // Apply a display mode so the virtual display has a valid resolution. On the
-    // private API the resolution lives in a CGVirtualDisplayMode inside a
-    // CGVirtualDisplaySettings, applied via -applySettings:. Non-fatal on failure.
-    @try {
-        Class modeClass = NSClassFromString(@"CGVirtualDisplayMode");
-        Class settingsClass = NSClassFromString(@"CGVirtualDisplaySettings");
-        if (modeClass && settingsClass) {
-            id<DLKVirtualDisplayMode> mode =
-                [(id<DLKVirtualDisplayMode>)[modeClass alloc] initWithWidth:(uint32_t)width
-                                                                     height:(uint32_t)height
-                                                                refreshRate:60.0];
-            id settings = [[settingsClass alloc] init];
-            [settings setValue:@[mode] forKey:@"modes"];
-            [self trySetValue:@(1) forKey:@"hiDPI" on:settings];
+    // hiDPI must be OFF: with hiDPI the mode dims are points and the backing store doubles, so WxH would be captured at 2Wx2H and mismatch the tablet's native pixels.
+    Class modeClass = NSClassFromString(@"CGVirtualDisplayMode");
+    Class settingsClass = NSClassFromString(@"CGVirtualDisplaySettings");
+    if (!modeClass || !settingsClass) {
+        // Non-fatal: the display keeps a default mode. Logged so it is visible.
+        NSLog(@"DeskLink: CGVirtualDisplayMode/Settings not available; using default mode");
+    } else @try {
+        id<DLKVirtualDisplayMode> mode =
+            [(id<DLKVirtualDisplayMode>)[modeClass alloc] initWithWidth:(uint32_t)width
+                                                                 height:(uint32_t)height
+                                                            refreshRate:60.0];
+        id settings = [[settingsClass alloc] init];
+        [settings setValue:@[mode] forKey:@"modes"];
+        [self trySetValue:@(0) forKey:@"hiDPI" on:settings];
 
-            id<DLKVirtualDisplayApply> applier = (id<DLKVirtualDisplayApply>)_virtualDisplay;
-            if ([applier respondsToSelector:@selector(applySettings:)]) {
-                [applier applySettings:settings];
-            }
+        id<DLKVirtualDisplayApply> applier = (id<DLKVirtualDisplayApply>)_virtualDisplay;
+        // Non-fatal on failure: a rejected mode keeps the default mode (logged below) rather than tearing down the connection.
+        if (![applier respondsToSelector:@selector(applySettings:)]) {
+            NSLog(@"DeskLink: CGVirtualDisplay has no applySettings: on this macOS version; using default mode");
+        } else if (![applier applySettings:settings]) {
+            NSLog(@"DeskLink: applySettings: returned NO for %lux%lu (continuing with default mode)",
+                  (unsigned long)width, (unsigned long)height);
         }
     } @catch (NSException *ex) {
-        NSLog(@"DeskLink: applying virtual display settings failed: %@", ex.reason ?: ex.name);
+        NSLog(@"DeskLink: applying virtual display settings threw: %@ (continuing)", ex.reason ?: ex.name);
     }
 
-    // Get the display ID
     NSNumber *displayIDValue = [_virtualDisplay valueForKey:@"displayID"];
-    if (displayIDValue) {
-        _displayID = [displayIDValue unsignedIntValue];
+    _displayID = displayIDValue ? [displayIDValue unsignedIntValue] : 0;
+    if (_displayID == 0) {
+        NSLog(@"DeskLink: virtual display has no valid display ID");
+    }
+
+    if (_displayID != 0) {
+        CGDisplayModeRef activeMode = CGDisplayCopyDisplayMode(_displayID);
+        if (activeMode) {
+            size_t actualWidth = CGDisplayModeGetPixelWidth(activeMode);
+            size_t actualHeight = CGDisplayModeGetPixelHeight(activeMode);
+            CGDisplayModeRelease(activeMode);
+            NSLog(@"DeskLink: virtual display requested %lux%lu, active %zux%zu",
+                  (unsigned long)width, (unsigned long)height, actualWidth, actualHeight);
+        }
     }
 
     _displayName = name ?: @"DeskLink Display";

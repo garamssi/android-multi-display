@@ -4,45 +4,68 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.desklink.android.data.settings.SettingsRepository
 import com.desklink.android.domain.model.DisplayConfig
+import com.desklink.android.domain.model.DisplayRotation
+import com.desklink.android.domain.model.TransportMode
+import com.desklink.android.domain.transport.DiscoveredServer
+import com.desklink.android.domain.transport.PeerDiscovery
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
 import javax.inject.Inject
 
-/**
- * Settings screen ViewModel. Reads/writes the shared [SettingsRepository] so a
- * selection persists across navigation and can be consumed by the connect flow
- * (A-L4). The UI state's initial defaults come from the repository's native-derived
- * config, keeping one consistent default resolution/bitrate across the app.
- */
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
     private val settingsRepository: SettingsRepository,
+    private val peerDiscovery: PeerDiscovery,
 ) : ViewModel() {
+
+    private val _discoveredServers = MutableStateFlow<List<DiscoveredServer>>(emptyList())
+    val discoveredServers: StateFlow<List<DiscoveredServer>> = _discoveredServers.asStateFlow()
+
+    private var discoveryJob: Job? = null
 
     val uiState: StateFlow<SettingsUiState> =
         combine(
             settingsRepository.config,
             settingsRepository.scrollSensitivity,
             settingsRepository.naturalScroll,
-            settingsRepository.playMacAudio,
-        ) { config, sensitivity, naturalScroll, playMacAudio ->
-            config.toUiState(sensitivity, naturalScroll, playMacAudio)
-        }.stateIn(
-            scope = viewModelScope,
-            started = SharingStarted.WhileSubscribed(5_000),
-            initialValue = settingsRepository.current().toUiState(
-                settingsRepository.currentScrollSensitivity(),
-                settingsRepository.currentNaturalScroll(),
-                settingsRepository.currentPlayMacAudio(),
-            ),
-        )
+            settingsRepository.transportMode,
+            settingsRepository.manualHost,
+        ) { config, sensitivity, naturalScroll, transportMode, manualHost ->
+            config.toUiState(sensitivity, naturalScroll, transportMode, manualHost)
+        }
+            .combine(settingsRepository.touchInputEnabled) { state, touchInputEnabled ->
+                state.copy(touchInputEnabled = touchInputEnabled)
+            }
+            .combine(settingsRepository.displayRotation) { state, rotation ->
+                state.copy(rotation = rotation)
+            }
+            .combine(settingsRepository.playMacAudio) { state, playMacAudio ->
+                state.copy(playMacAudio = playMacAudio)
+            }
+            .stateIn(
+                scope = viewModelScope,
+                started = SharingStarted.WhileSubscribed(5_000),
+                initialValue = settingsRepository.current().toUiState(
+                    settingsRepository.currentScrollSensitivity(),
+                    settingsRepository.currentNaturalScroll(),
+                    settingsRepository.currentTransportMode(),
+                    settingsRepository.currentManualHost(),
+                ).copy(
+                    touchInputEnabled = settingsRepository.currentTouchInputEnabled(),
+                    rotation = settingsRepository.currentDisplayRotation(),
+                    playMacAudio = settingsRepository.currentPlayMacAudio(),
+                ),
+            )
 
     fun setResolution(width: Int, height: Int) = settingsRepository.setResolution(width, height)
 
-    /** Reset the streaming resolution to the device's real native size. */
     fun useNativeResolution() =
         settingsRepository.setResolution(settingsRepository.nativeWidth, settingsRepository.nativeHeight)
 
@@ -56,15 +79,44 @@ class SettingsViewModel @Inject constructor(
 
     fun setNaturalScroll(enabled: Boolean) = settingsRepository.setNaturalScroll(enabled)
 
+    fun setTouchInputEnabled(enabled: Boolean) = settingsRepository.setTouchInputEnabled(enabled)
+
     fun setPlayMacAudio(enabled: Boolean) = settingsRepository.setPlayMacAudio(enabled)
 
-    /** The current user selection as a [DisplayConfig] (used by the connect flow). */
+    fun setDisplayRotation(rotation: DisplayRotation) = settingsRepository.setDisplayRotation(rotation)
+
+    fun setTransportMode(mode: TransportMode) = settingsRepository.setTransportMode(mode)
+
+    fun setManualHost(value: String) = settingsRepository.setManualHost(value)
+
+    fun startDiscovery() {
+        if (discoveryJob?.isActive == true) return
+        discoveryJob = viewModelScope.launch {
+            peerDiscovery.servers().collect { _discoveredServers.value = it }
+        }
+    }
+
+    fun stopDiscovery() {
+        discoveryJob?.cancel()
+        discoveryJob = null
+        _discoveredServers.value = emptyList()
+    }
+
+    fun selectDiscoveredServer(server: DiscoveredServer) =
+        settingsRepository.setManualHost(server.host)
+
+    override fun onCleared() {
+        super.onCleared()
+        stopDiscovery()
+    }
+
     fun toDisplayConfig(): DisplayConfig = settingsRepository.current()
 
     private fun DisplayConfig.toUiState(
         scrollSensitivity: Float,
         naturalScroll: Boolean,
-        playMacAudio: Boolean,
+        transportMode: TransportMode,
+        manualHost: String,
     ) = SettingsUiState(
         width = width,
         height = height,
@@ -75,7 +127,8 @@ class SettingsViewModel @Inject constructor(
         nativeHeight = nativeHeight,
         scrollSensitivity = scrollSensitivity,
         naturalScroll = naturalScroll,
-        playMacAudio = playMacAudio,
+        transportMode = transportMode,
+        manualHost = manualHost,
     )
 }
 
@@ -89,19 +142,20 @@ data class SettingsUiState(
     val nativeHeight: Int = DisplayConfig().nativeHeight,
     val scrollSensitivity: Float = 3.0f,
     val naturalScroll: Boolean = true,
+    val transportMode: TransportMode = TransportMode.USB,
+    val manualHost: String = "",
+    val touchInputEnabled: Boolean = true,
+    val rotation: DisplayRotation = DisplayRotation.ROTATION_0,
     val playMacAudio: Boolean = SettingsRepository.DEFAULT_PLAY_MAC_AUDIO,
 ) {
-    /** True when the current streaming resolution equals the device's native size. */
     val isNativeSelected: Boolean get() = width == nativeWidth && height == nativeHeight
 
     companion object {
-        /** Options for the "Mac audio" control. */
         val AUDIO_OPTIONS = listOf(
             AudioOption(enabled = true, label = "Play here"),
             AudioOption(enabled = false, label = "Off"),
         )
 
-        /** Fixed resolution presets shown below the dynamic "Native" option. */
         val RESOLUTION_PRESETS = listOf(
             2560 to 1600,
             1920 to 1200,
@@ -109,37 +163,43 @@ data class SettingsUiState(
         )
         val FPS_OPTIONS = listOf(30, 60, 120)
 
-        /** Bitrate presets: Low / Medium / High (10 / 20 / 40 Mbps). */
         val BITRATE_OPTIONS = listOf(
             BitrateOption(10_000, "Low"),
             BitrateOption(20_000, "Medium"),
             BitrateOption(40_000, "High"),
         )
 
-        /** Scroll speed presets (sensitivity multiplier applied on the tablet). */
         val SCROLL_SPEED_OPTIONS = listOf(
             ScrollSpeedOption(1.5f, "Slow"),
             ScrollSpeedOption(3.0f, "Normal"),
             ScrollSpeedOption(5.0f, "Fast"),
         )
 
-        /** Scroll direction options. Natural = content follows the fingers (macOS
-         *  default); Reversed inverts it. Applied on the tablet before sending. */
         val SCROLL_DIRECTION_OPTIONS = listOf(
             ScrollDirectionOption(natural = true, label = "Natural"),
             ScrollDirectionOption(natural = false, label = "Reversed"),
         )
+
+        val TOUCH_INPUT_OPTIONS = listOf(
+            TouchInputOption(enabled = true, label = "On"),
+            TouchInputOption(enabled = false, label = "Off"),
+        )
+
+        val ROTATION_OPTIONS = listOf(
+            DisplayRotation.ROTATION_0,
+            DisplayRotation.ROTATION_90,
+            DisplayRotation.ROTATION_180,
+            DisplayRotation.ROTATION_270,
+        )
     }
 }
 
-/** A selectable bitrate preset with a human label. */
 data class BitrateOption(val kbps: Int, val label: String)
 
-/** A selectable scroll-speed preset (sensitivity multiplier) with a human label. */
 data class ScrollSpeedOption(val sensitivity: Float, val label: String)
 
-/** A selectable scroll-direction preset with a human label. */
 data class ScrollDirectionOption(val natural: Boolean, val label: String)
 
-/** One choice in the "Mac audio" control. */
+data class TouchInputOption(val enabled: Boolean, val label: String)
+
 data class AudioOption(val enabled: Boolean, val label: String)

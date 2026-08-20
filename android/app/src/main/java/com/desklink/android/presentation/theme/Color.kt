@@ -4,13 +4,6 @@ import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.ui.graphics.Color
 
-/**
- * The fixed dark Material3 [ColorScheme] for DeskLink, mapped onto [DeskLinkTokens].
- *
- * Most of the redesigned UI paints with tokens directly (gradients, translucent
- * surfaces, precise hexes), so this scheme mainly governs the handful of stock M3
- * components still in use and provides sensible fallbacks. There is no dynamic color.
- */
 val DeskLinkDarkColorScheme: ColorScheme = darkColorScheme(
     primary = DeskLinkTokens.AccentSolid,
     onPrimary = Color.White,

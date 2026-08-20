@@ -1,44 +1,35 @@
 import Foundation
 import Observation
+import AppKit
 
-/// High-level server state surfaced to the menu-bar UI.
 public enum ServerStatus: Sendable, Equatable {
-    /// Server stopped — nothing listening.
     case disconnected
-    /// Server started and listening, but no client has completed handshake yet.
     case connecting
-    /// A client has finished handshake/config negotiation and is streaming.
     case connected
 }
 
-/// Observable presentation model for `StatusMenuView`.
-///
-/// Owns the `ServerCoordinator` and translates its lifecycle callbacks into the
-/// reactive state the popover renders. It only *observes* the coordinator — all
-/// streaming/handshake/ADB behaviour stays inside the coordinator and its use cases.
 @MainActor
 @Observable
 public final class ServerViewModel {
 
     // MARK: - Published state
 
-    /// Drives the whole popover layout (disconnected vs connecting vs connected).
     public private(set) var status: ServerStatus = .disconnected
 
-    /// Connected device model (from the handshake `ClientInfo`). `nil` when idle.
     public private(set) var deviceName: String?
 
-    /// Physical link. Always "USB" — the exact bus version isn't negotiated, so the
-    /// spec's "USB 3.2" is shown as a sensible constant.
-    public var link: String = "USB"
+    public private(set) var link: String = "USB"
 
-    /// Negotiated output resolution, e.g. "2560×1600". `nil` when idle.
+    public private(set) var wifiListening = false
+
+    public private(set) var pairingPin: String = PairingPin.current
+
+    public private(set) var pairingSecondsRemaining: Int = PairingPin.secondsRemaining()
+
     public private(set) var output: String?
 
-    /// Negotiated frame line, e.g. "60 fps · H.265". `nil` when idle.
     public private(set) var frame: String?
 
-    /// Live uptime "HH:MM:SS", derived from `connectedAt` and ticked each second.
     public private(set) var uptime: String = "00:00:00"
 
     // MARK: - Private
@@ -55,35 +46,30 @@ public final class ServerViewModel {
     // MARK: - Coordinator wiring
 
     private func wireCoordinator() {
-        // Coarse status changes: start() → .connecting, stop() → .disconnected.
-        coordinator.onStatusChange = { [weak self] status in
-            guard let self else { return }
-            self.status = status
-            if status != .connected {
-                self.clearConnectionMetadata()
-            }
+        coordinator.onConnectionChanged = { [weak self] snapshot in
+            self?.apply(snapshot)
         }
+    }
 
-        // A client finished handshake/config negotiation and streaming began.
-        coordinator.onClientConnected = { [weak self] info, config in
-            self?.applyConnected(info: info, config: config)
-        }
-
-        // The active client dropped, but the server is still listening.
-        coordinator.onClientDisconnected = { [weak self] in
-            guard let self else { return }
-            self.status = .connecting
-            self.clearConnectionMetadata()
+    private func apply(_ snapshot: ConnectionSnapshot) {
+        switch snapshot {
+        case .stopped:
+            status = .disconnected
+            clearConnectionMetadata()
+        case .waiting:
+            status = .connecting
+            clearConnectionMetadata()
+        case let .connected(info, config, transport):
+            applyConnected(info: info, config: config, transport: transport)
         }
     }
 
     // MARK: - Intents
 
-    /// Starts the server. Optimistically flips to `.connecting`; reverts to
-    /// `.disconnected` if the coordinator throws while binding.
     public func start() {
         guard status == .disconnected else { return }
         status = .connecting
+        wifiListening = TransportSettings.wifiEnabled
         Task { [weak self] in
             guard let self else { return }
             do {
@@ -95,23 +81,37 @@ public final class ServerViewModel {
         }
     }
 
-    /// Stops the server and returns to the disconnected layout.
     public func stop() {
         Task { [weak self] in
             await self?.coordinator.stop()
         }
     }
 
+    public func tickPairing() {
+        guard status == .connecting, wifiListening else { return }
+        PairingPin.rotateIfExpired()
+        pairingPin = PairingPin.current
+        pairingSecondsRemaining = PairingPin.secondsRemaining()
+    }
+
+    public func copyPairingPin() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(pairingPin, forType: .string)
+    }
+
     // MARK: - State transitions
 
-    private func applyConnected(info: ClientInfo, config: DisplayConfig) {
+    private func applyConnected(info: ClientInfo, config: DisplayConfig, transport: TransportKind) {
         let model = info.deviceModel
         deviceName = (model.isEmpty || model == "Unknown") ? info.clientName : model
+        link = transport.displayName
         output = "\(config.width)×\(config.height)"
         frame = "\(config.fps) fps · \(config.codec == .hevc ? "H.265" : "H.264")"
-        connectedAt = Date()
         status = .connected
-        startUptimeTimer()
+        if connectedAt == nil {
+            connectedAt = Date()
+            startUptimeTimer()
+        }
     }
 
     private func clearConnectionMetadata() {

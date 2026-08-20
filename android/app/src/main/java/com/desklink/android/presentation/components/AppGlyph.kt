@@ -16,11 +16,6 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.desklink.android.presentation.theme.DeskLinkTokens
 
-/**
- * The DeskLink app glyph: a gradient rounded-square logo tile with a white monitor
- * (DesktopWindows) line icon. Used at 78dp on the connect screens and at 56dp inside
- * the connecting spinner ring.
- */
 @Composable
 fun AppGlyph(
     modifier: Modifier = Modifier,

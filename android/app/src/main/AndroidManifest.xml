@@ -4,6 +4,16 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
+    <!-- Wi-Fi (LAN) service discovery via NsdManager. NEARBY_WIFI_DEVICES is the
+         Android 13+ runtime permission for local-network Wi-Fi APIs (requested before
+         discovery); neverForLocation asserts we don't derive location from Wi-Fi.
+         CHANGE_WIFI_MULTICAST_STATE lets us hold a multicast lock so mDNS replies are
+         received. Only used by the opt-in Wi-Fi transport; USB never needs these. -->
+    <uses-permission
+        android:name="android.permission.NEARBY_WIFI_DEVICES"
+        android:usesPermissionFlags="neverForLocation" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+
     <!-- Keep the connection alive while the app is backgrounded (a minimize is not a
          disconnect). CHANGE_NETWORK_STATE is the qualifying permission for the
          "connectedDevice" foreground-service type on Android 14+. -->

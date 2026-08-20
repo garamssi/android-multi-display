@@ -14,16 +14,6 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import javax.inject.Inject
 import javax.inject.Singleton
 
-/**
- * Observes the device's USB gadget state via the `ACTION_USB_STATE` system broadcast.
- *
- * `ACTION_USB_STATE` is a *sticky* broadcast, so registering the receiver delivers the
- * current state immediately (no wait for a plug/unplug event); the `connected` extra
- * is true when a USB data link to a host exists. The action/extra are de-facto system
- * strings (not public SDK constants) but have been stable across Android versions; if
- * a device never delivers them, the flow simply stays `false` — which honestly reads
- * as "No USB" rather than a false-positive.
- */
 @Singleton
 class UsbStateMonitorImpl @Inject constructor(
     @ApplicationContext private val context: Context,
@@ -36,8 +26,7 @@ class UsbStateMonitorImpl @Inject constructor(
             }
         }
         val filter = IntentFilter(ACTION_USB_STATE)
-        // NOT_EXPORTED: only the system delivers this protected broadcast to us. The
-        // returned sticky intent gives the current state right away.
+        // ACTION_USB_STATE is sticky: registering returns the current state immediately.
         val sticky = ContextCompat.registerReceiver(
             context,
             receiver,

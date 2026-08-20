@@ -19,16 +19,6 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.desklink.android.presentation.theme.DeskLinkTokens
 
-/**
- * Generic single-choice segmented control matching the handoff spec:
- * container `rgba(255,255,255,.05)` bg + `rgba(255,255,255,.07)` border, 4dp padding,
- * 4dp gap between segments; each segment `flex:1`, 10dp radius; the selected segment
- * gets the accent gradient + colored shadow, while unselected segments are transparent.
- *
- * [content] fully owns each segment's interior (it receives the option + whether it's
- * selected), so callers can render single-line labels (with a leading check) or the
- * two-line bitrate labels.
- */
 @Composable
 fun <T> SegmentedControl(
     options: List<T>,

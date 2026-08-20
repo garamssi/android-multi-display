@@ -9,20 +9,29 @@ Mac 서버와 Android 클라이언트 간 통신 프로토콜 정의.
 
 ## 1. 통신 채널
 
-| 채널 | 용도 | 전송 방식 | 기본 포트 |
-|------|------|-----------|-----------|
-| Control | 핸드셰이크, 설정 협상, 상태 제어 | TCP | 7100 |
-| Video | HEVC 인코딩 프레임 스트림 | TCP | 7101 |
-| Input | 터치/입력 이벤트 역전송 | TCP | 7102 |
-| Audio | 맥 시스템 오디오 PCM 스트림 | TCP | 7103 |
+Mac은 전송 방식별로 **독립된 리스너 스택**을 동시에 운영한다. USB 스택은 항상 켜져 있고
+(loopback, 평문, PIN 없음), Wi‑Fi를 켜면 LAN 스택(전 인터페이스, TLS, PIN 페어링)이 함께
+뜬다. 두 스택이 동시에 리슨하므로 Wi‑Fi가 켜져 있어도 USB는 PIN 없이 즉시 연결된다. 클라이언트는
+어느 소켓(포트)에 접속했는지로 전송 방식이 결정되며, 이는 클라이언트가 위조할 수 없다.
 
-USB 모드에서는 ADB **reverse** 터널로 연결한다. Mac이 서버(리슨)이고 Android가 `127.0.0.1`로 접속하는 클라이언트이므로 `adb reverse`(device→host)를 사용한다:
+| 채널 | 용도 | 전송 방식 | USB 포트 | LAN 포트 |
+|------|------|-----------|----------|----------|
+| Control | 핸드셰이크, 설정 협상, 상태 제어 | TCP | 7100 | 7110 |
+| Video | HEVC 인코딩 프레임 스트림 | TCP | 7101 | 7111 |
+| Input | 터치/입력 이벤트 역전송 | TCP | 7102 | 7112 |
+| Audio | 맥 시스템 오디오 PCM 스트림 | TCP | 7103 | 7113 |
+
+USB 스택은 평문·무인증(케이블이 신뢰 경계), LAN 스택은 TLS + PIN 상호 인증이다. USB 모드에서는
+ADB **reverse** 터널로 연결한다. Mac이 서버(리슨)이고 Android가 `127.0.0.1`로 접속하는 클라이언트이므로 `adb reverse`(device→host)를 사용한다:
 ```bash
 adb reverse tcp:7100 tcp:7100   # Control
 adb reverse tcp:7101 tcp:7101   # Video
 adb reverse tcp:7102 tcp:7102   # Input
 adb reverse tcp:7103 tcp:7103   # Audio
 ```
+
+Audio 채널은 현재 **USB에서만** 동작한다. 무압축 PCM(약 1.5 Mbps)이라 Wi‑Fi에는 부적합하며,
+LAN 포트(7113)는 코덱이 생길 때를 위해 예약만 되어 있다.
 
 ---
 
@@ -64,8 +73,29 @@ adb reverse tcp:7103 tcp:7103   # Audio
 | 0x0A | DISCONNECT | 양방향 | 정상 종료 |
 | 0x0B | BITRATE_UPDATE | Server → Client | 비트레이트 변경 통보 |
 | 0x0C | CONFIG_UPDATE | 양방향 | 스트림 중 설정 변경 요청 |
+| 0x0D | AUTH_CHALLENGE | Server → Client | LAN 인증: 서버 nonce (TLS 내부, USB는 미사용) |
+| 0x0E | AUTH_RESPONSE | Client → Server | LAN 인증: 클라이언트 nonce + 증명 |
+| 0x0F | AUTH_CONFIRM | Server → Client | LAN 인증: 서버 증명 |
 
-타입 코드 대역: Control `0x01-0x0F`, Video `0x10-0x1F`, Input `0x20-0x2F`, Audio `0x30-0x3F`.
+### 3.1a LAN 상호 인증 (0x0D–0x0F, WiFi 전용)
+
+USB(loopback)에는 적용하지 않는다. WiFi(LAN)에서 TLS 채널이 맺어진 뒤, 핸드셰이크
+(0x01) 앞단에 PIN 기반 상호 인증을 수행한다. 페어링 키 `K = HKDF-SHA256(PIN)`
+(§pairing_vectors.py)를 양쪽이 보유하며, PIN/키 자체는 전송하지 않는다.
+
+증명 = `HMAC-SHA256(K, context || serverNonce || clientNonce)`. 방향별 context로
+역방향 재사용을 차단한다:
+- 클라이언트: `"desklink-auth-client"`
+- 서버: `"desklink-auth-server"`
+
+흐름:
+1. Server → **AUTH_CHALLENGE**: `serverNonce`(16B 랜덤).
+2. Client → **AUTH_RESPONSE**: `clientNonce`(16B) + `clientProof`(32B).
+3. Server가 `clientProof` 검증(상수 시간). 실패 시 연결 종료 + 실패 카운트 증가(잠금).
+4. Server → **AUTH_CONFIRM**: `serverProof`(32B). Client가 검증 후 핸드셰이크로 진행.
+
+3자(Python/Swift/Kotlin) 골든 벡터는 `tools/protocol_vectors.py`의 `AUTH_*`에 있으며
+"ALL CHECKS PASS"를 유지한다. 프레이밍은 공통 `[len u32 BE][type u8][payload]` 그대로다.
 
 ### 3.2 핸드셰이크 흐름
 
@@ -129,6 +159,13 @@ Payload: JSON (UTF-8)
   "bitrateKbps": 20000
 }
 ```
+
+`width`/`height`는 요청 화면 방향을 그대로 담는다. 세로(portrait) 요청은 `height > width`로
+보낸다. 서버는 방향을 보존한 채 태블릿 패널에 맞춰 클램프한다: 요청의 긴 변은 패널의 긴 변,
+짧은 변은 패널의 짧은 변에 각각 `min`으로 맞춘다(축별 단순 `min`이 아니다 — 세로 요청의
+height가 가로 패널 height로 깎여 왜곡되는 것을 막기 위함). 별도의 orientation 필드는 없으며
+방향은 dims로만 표현한다. 화면의 상하 반전(180 플립)은 태블릿에서만 처리하고 이 프로토콜로는
+전달하지 않는다.
 
 ### 3.6 CONFIG_RESPONSE (0x04)
 
@@ -396,7 +433,7 @@ Payload (7 bytes):
 |----------|------|------|
 | 0x01 | PCM_S16LE | 인터리브 signed 16-bit **little-endian** |
 
-`Bits Per Sample`은 `Encoding`이 함의하는 값과 일치해야 한다. 불일치하는 조합, `Sample Rate = 0`,
+`Bits Per Sample`은 `Encoding`이 함의하는 값과 일치해야 한다. 불일치 조합, `Sample Rate = 0`,
 `Channels = 0`은 모두 거부한다.
 
 ### 6.3 AUDIO_FRAME (0x31)
@@ -413,8 +450,8 @@ Payload:
 - `Timestamp`: 첫 샘플 프레임의 캡처 시각. **VIDEO_FRAME의 Timestamp와 동일한 축**(호스트 가동
   시간 마이크로초)이다. 립싱크는 전적으로 이 공유 축에 의존한다.
 - `Frame Count`: 채널당 **샘플 프레임 수**(바이트 수도, 전체 샘플 수도 아니다).
-  `len(PCM) == Frame Count * Channels * BitsPerSample / 8`을 만족해야 하며, 수신 측은 재생 타이밍에
-  이 값을 쓰기 전에 반드시 검증한다.
+  `len(PCM) == Frame Count * Channels * BitsPerSample / 8`을 만족해야 한다. 수신 측은 재생
+  타이밍에 이 값을 쓰기 전에 반드시 검증한다. 이 검증은 32비트 곱셈 오버플로를 피해야 한다.
 
 ### 6.4 PCM 페이로드의 엔디안
 
@@ -474,7 +511,7 @@ Float32 → Int16 변환은 **32768로 스케일한 뒤 클램프**한다. `-1.0
 
 ## 9. ADB 포트 포워딩 명령
 
-> **중요**: Mac이 **서버**(7100~7103 리슨)이고 Android가 `127.0.0.1:PORT`로 접속하는 **클라이언트**이므로,
+> **중요**: Mac이 **서버**(7100~7102 리슨)이고 Android가 `127.0.0.1:PORT`로 접속하는 **클라이언트**이므로,
 > `adb forward`(host→device)가 아니라 **`adb reverse`(device→host)** 를 사용한다. `adb forward`는 서버가 기기에 있을 때 쓰는 방향이라 이 구조에서는 연결되지 않는다.
 
 ```bash
@@ -482,13 +519,11 @@ Float32 → Int16 변환은 **32768로 스케일한 뒤 클램프**한다. `-1.0
 adb reverse tcp:7100 tcp:7100   # Control
 adb reverse tcp:7101 tcp:7101   # Video
 adb reverse tcp:7102 tcp:7102   # Input
-adb reverse tcp:7103 tcp:7103   # Audio
 
 # reverse 터널 해제
 adb reverse --remove tcp:7100
 adb reverse --remove tcp:7101
 adb reverse --remove tcp:7102
-adb reverse --remove tcp:7103
 
 # 전체 해제
 adb reverse --remove-all

@@ -3,17 +3,8 @@ import CoreGraphics
 import ImageIO
 import UniformTypeIdentifiers
 
-/// Utility to save raw captured frames as PNG for verification.
-/// Used during development to confirm that virtual display + capture works correctly.
 public enum CaptureVerifier {
 
-    /// Saves raw BGRA pixel data as a PNG file.
-    /// - Parameters:
-    ///   - frame: The captured VideoFrame with raw BGRA data
-    ///   - width: Image width in pixels
-    ///   - height: Image height in pixels
-    ///   - path: File path to save the PNG
-    /// - Throws: ConnectionError.displayCaptureFailed if save fails
     public static func saveAsPNG(frame: VideoFrame, width: Int, height: Int, path: String) throws {
         let bytesPerRow = width * 4 // BGRA = 4 bytes per pixel
         let expectedSize = bytesPerRow * height
@@ -36,7 +27,6 @@ public enum CaptureVerifier {
             throw ConnectionError.displayCaptureFailed
         }
 
-        // Copy frame data into the context
         guard let contextData = context.data else {
             throw ConnectionError.displayCaptureFailed
         }

@@ -30,12 +30,6 @@ import androidx.compose.ui.unit.sp
 import com.desklink.android.presentation.theme.DeskLinkTokens
 import com.desklink.android.presentation.theme.PlexSans
 
-/**
- * Primary accent-gradient button (the handoff CTA). Renders the vertical accent
- * gradient with a colored drop shadow and a subtle top inner highlight, plus an
- * optional leading line icon. Built on a clickable [Box] rather than a Material
- * [androidx.compose.material3.Button] so the gradient/shadow/inset match the spec exactly.
- */
 @Composable
 fun GradientButton(
     text: String,
@@ -66,7 +60,6 @@ fun GradientButton(
             )
             .clip(shape)
             .background(brush = DeskLinkTokens.AccentVertical, shape = shape)
-            // Inset top highlight — approximates `inset 0 1px 0 rgba(255,255,255,.3)`.
             .border(BorderStroke(1.dp, Color.White.copy(alpha = 0.14f)), shape)
             .clickable(enabled = enabled, onClick = onClick)
             .padding(horizontal = horizontalPadding),
@@ -95,10 +88,6 @@ fun GradientButton(
     }
 }
 
-/**
- * Outlined "ghost with border" button (Cancel / Open Settings). Transparent fill,
- * subtle white border, body-colored label.
- */
 @Composable
 fun OutlineButton(
     text: String,
@@ -131,10 +120,6 @@ fun OutlineButton(
     }
 }
 
-/**
- * Ghost text button (Settings on Start, "Reset to defaults" in the header). No border
- * or fill; secondary-colored label with a rounded ripple.
- */
 @Composable
 fun GhostTextButton(
     text: String,

@@ -112,7 +112,7 @@ private final class RecordingServer: StreamServing, @unchecked Sendable {
     private let state = ServerState()
     var sent: [SentMessage] { get async { await state.sent } }
 
-    func start(port: UInt16) async throws {}
+    func start(port: UInt16, scope: ListenerScope) async throws {}
     func stop() async {}
     func send(data: Data, type: MessageType) async throws {
         await state.append(SentMessage(data: data, type: type))

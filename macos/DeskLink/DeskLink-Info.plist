@@ -35,5 +35,16 @@
     <string>DeskLink needs to capture your Mac's audio so it can play through the connected tablet instead of the Mac's speakers.</string>
     <key>NSHumanReadableCopyright</key>
     <string>DeskLink</string>
+    <!-- Shown if macOS prompts for Local Network access when Wi-Fi (LAN) connections
+         are enabled and a tablet on the same network connects. USB (adb reverse over
+         loopback) does not require this. -->
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>DeskLink uses your local network to connect to your tablet over Wi-Fi when you enable Wi-Fi (LAN) connections.</string>
+    <!-- Bonjour service advertised on the control port so the tablet can discover this
+         Mac over Wi-Fi (required to advertise/browse via NWListener on macOS 15+). -->
+    <key>NSBonjourServices</key>
+    <array>
+        <string>_desklink._tcp</string>
+    </array>
 </dict>
 </plist>

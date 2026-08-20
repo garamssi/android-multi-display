@@ -1,16 +1,15 @@
 import SwiftUI
 import AppKit
 
-/// Menu-bar popover for the DeskLink server, rebuilt to the hi-fi handoff (spec §1).
-/// Renders reactively from `ServerViewModel.status` — a disconnected/connecting
-/// layout and a connected layout with live stats + uptime. All colors, sizes,
-/// gradients, radii and shadows come from `DesignTokens`.
 @MainActor
 struct StatusMenuView: View {
     let viewModel: ServerViewModel
 
-    /// Opens the dedicated Settings `Window` scene (see `DeskLinkApp`).
     @Environment(\.openWindow) private var openWindow
+
+    private var showPin: Bool {
+        viewModel.status == .connecting && viewModel.wifiListening
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -24,6 +23,12 @@ struct StatusMenuView: View {
             if viewModel.status == .connected {
                 statsCard
                     .padding(.bottom, 12)
+            } else if showPin {
+                pinBlock
+                    .padding(.bottom, 12)
+            } else if viewModel.status == .connecting {
+                usbOnlyNote
+                    .padding(.bottom, 12)
             }
 
             primaryButton
@@ -36,7 +41,10 @@ struct StatusMenuView: View {
         .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.panel, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: DesignTokens.Radius.panel, style: .continuous)
-                .strokeBorder(DesignTokens.borderStrong, lineWidth: 1)
+                .strokeBorder(
+                    showPin ? DesignTokens.pairingRingBorder : DesignTokens.borderStrong,
+                    lineWidth: 1
+                )
         )
         .shadow(
             color: DesignTokens.PanelShadow.color,
@@ -44,7 +52,14 @@ struct StatusMenuView: View {
             x: 0,
             y: DesignTokens.PanelShadow.y
         )
+        .shadow(color: showPin ? DesignTokens.pairingRingGlow : .clear, radius: showPin ? 10 : 0)
         .padding(8) // give the shadow / rounded corners room inside the menu window
+        .task {
+            while !Task.isCancelled {
+                viewModel.tickPairing()
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+            }
+        }
         .animation(.easeInOut(duration: 0.25), value: viewModel.status)
     }
 
@@ -65,6 +80,11 @@ struct StatusMenuView: View {
 
     // MARK: - Header
 
+    private var appVersionLabel: String {
+        (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String)
+            .map { "v\($0)" } ?? "—"
+    }
+
     private var headerRow: some View {
         HStack(spacing: 11) {
             appGlyph
@@ -73,7 +93,7 @@ struct StatusMenuView: View {
                 Text("DeskLink Server")
                     .font(.plexSans(size: 15, weight: .semibold))
                     .foregroundStyle(DesignTokens.textPrimary)
-                Text("v1.4.0")
+                Text(appVersionLabel)
                     .font(.plexMono(size: 11))
                     .foregroundStyle(DesignTokens.textTertiary)
             }
@@ -93,7 +113,6 @@ struct StatusMenuView: View {
             .fill(DesignTokens.appGlyphGradient)
             .frame(width: 32, height: 32)
             .overlay(
-                // inset 0 1px 0 rgba(255,255,255,.4) — a top highlight.
                 RoundedRectangle(cornerRadius: DesignTokens.Radius.glyph, style: .continuous)
                     .strokeBorder(Color.white.opacity(0.4), lineWidth: 1)
                     .mask(LinearGradient(colors: [.white, .clear], startPoint: .top, endPoint: .center))
@@ -144,7 +163,7 @@ struct StatusMenuView: View {
 
     private var statusLabelText: String {
         switch viewModel.status {
-        case .disconnected: return "Not connected"
+        case .disconnected: return "Server stopped"
         case .connecting: return "Waiting for device"
         case .connected: return "Connected"
         }
@@ -159,22 +178,29 @@ struct StatusMenuView: View {
     }
 
     @ViewBuilder private var statusMeta: some View {
-        if viewModel.status == .connected {
+        switch viewModel.status {
+        case .connected:
             Text(viewModel.uptime)
                 .font(.plexMono(size: 11))
                 .foregroundStyle(DesignTokens.textTertiary)
                 .monospacedDigit()
-        } else {
-            Text("USB · idle")
-                .font(.plexMono(size: 11, weight: .medium))
-                .foregroundStyle(DesignTokens.textTertiary)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 3)
-                .background(
-                    RoundedRectangle(cornerRadius: DesignTokens.Radius.chip, style: .continuous)
-                        .fill(DesignTokens.surfaceChip)
-                )
+        case .connecting:
+            metaChip(viewModel.wifiListening ? "USB · Wi-Fi" : "USB")
+        case .disconnected:
+            metaChip("offline")
         }
+    }
+
+    private func metaChip(_ text: String) -> some View {
+        Text(text)
+            .font(.plexMono(size: 11, weight: .medium))
+            .foregroundStyle(DesignTokens.textTertiary)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(
+                RoundedRectangle(cornerRadius: DesignTokens.Radius.chip, style: .continuous)
+                    .fill(DesignTokens.surfaceChip)
+            )
     }
 
     // MARK: - Stats card (connected only)
@@ -200,6 +226,90 @@ struct StatusMenuView: View {
             RoundedRectangle(cornerRadius: DesignTokens.Radius.statsCard, style: .continuous)
                 .strokeBorder(DesignTokens.borderSubtle, lineWidth: 1)
         )
+    }
+
+    // MARK: - Pairing PIN (waiting state)
+
+    private var pinBlock: some View {
+        VStack(alignment: .leading, spacing: 11) {
+            HStack(spacing: 8) {
+                Text("PAIRING PIN")
+                    .font(.plexMono(size: 10.5, weight: .medium))
+                    .tracking(1.4)
+                    .foregroundStyle(DesignTokens.pairingLabel)
+                Spacer(minLength: 8)
+                copyButton
+            }
+            HStack(spacing: 7) {
+                ForEach(Array(viewModel.pairingPin.enumerated()), id: \.offset) { _, digit in
+                    Text(String(digit))
+                        .font(.plexMono(size: 22, weight: .semibold))
+                        .foregroundStyle(DesignTokens.textPrimary)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 48)
+                        .background(
+                            DesignTokens.pinCellGradient,
+                            in: RoundedRectangle(cornerRadius: DesignTokens.Radius.pinCell, style: .continuous)
+                        )
+                        .overlay {
+                            RoundedRectangle(cornerRadius: DesignTokens.Radius.pinCell, style: .continuous)
+                                .strokeBorder(DesignTokens.pinCellBorder, lineWidth: 1)
+                        }
+                }
+            }
+            HStack(spacing: 6) {
+                Image(systemName: "clock")
+                    .font(.system(size: 11))
+                    .foregroundStyle(DesignTokens.textTertiary)
+                Text("New code in \(viewModel.pairingSecondsRemaining)s · enter on tablet")
+                    .font(.plexMono(size: 11))
+                    .foregroundStyle(DesignTokens.textTertiary)
+            }
+        }
+        .padding(14)
+        .background(
+            DesignTokens.pairingCardGradient,
+            in: RoundedRectangle(cornerRadius: DesignTokens.Radius.pairingCard, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: DesignTokens.Radius.pairingCard, style: .continuous)
+                .strokeBorder(DesignTokens.pairingCardBorder, lineWidth: 1)
+        }
+    }
+
+    private var copyButton: some View {
+        Button { viewModel.copyPairingPin() } label: {
+            HStack(spacing: 5) {
+                Image(systemName: "doc.on.doc").font(.system(size: 11))
+                Text("Copy").font(.plexSans(size: 11, weight: .medium))
+            }
+            .foregroundStyle(DesignTokens.pairingCopyText)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 4)
+            .background(
+                DesignTokens.copyButtonBg,
+                in: RoundedRectangle(cornerRadius: DesignTokens.Radius.chip, style: .continuous)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: DesignTokens.Radius.chip, style: .continuous)
+                    .strokeBorder(DesignTokens.copyButtonBorder, lineWidth: 1)
+            }
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var usbOnlyNote: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "cable.connector")
+                .font(.system(size: 12))
+                .foregroundStyle(DesignTokens.textTertiary)
+            Text("USB only — turn on Wi-Fi in Settings to pair over LAN.")
+                .font(.plexSans(size: 12))
+                .foregroundStyle(DesignTokens.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.horizontal, 4)
     }
 
     // MARK: - Primary action
@@ -229,8 +339,6 @@ struct StatusMenuView: View {
     private var ghostRows: some View {
         VStack(spacing: 0) {
             Button {
-                // Open the Settings window and bring the (accessory) app forward so it
-                // isn't buried behind other windows.
                 openWindow(id: SettingsWindowID.value)
                 NSApp.activate()
             } label: {
@@ -292,7 +400,6 @@ private struct StatField: View {
 
 // MARK: - Status dots
 
-/// Amber "not connected"/"waiting" dot — pulses scale 1→1.3, opacity .45→1 (1.8s).
 private struct PulsingDot: View {
     let color: Color
 
@@ -311,7 +418,6 @@ private struct PulsingDot: View {
     }
 }
 
-/// Solid green "connected" dot with a soft glow.
 private struct GlowDot: View {
     let color: Color
 
@@ -325,14 +431,12 @@ private struct GlowDot: View {
 
 // MARK: - Button styles (hover-aware)
 
-/// Accent-gradient primary button (Start Server). Brightens on hover.
 private struct AccentButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         Content(configuration: configuration)
     }
 
-    // Named `Content`, not `Body`: a nested type named `Body` would collide with
-    // ButtonStyle's `Body` associated type and break protocol inference.
+    // Named `Content`, not `Body`: a nested `Body` collides with ButtonStyle's `Body` associated type and breaks protocol inference.
     private struct Content: View {
         let configuration: ButtonStyleConfiguration
         @State private var hovering = false
@@ -346,7 +450,6 @@ private struct AccentButtonStyle: ButtonStyle {
                     ZStack {
                         RoundedRectangle(cornerRadius: DesignTokens.Radius.primaryButton, style: .continuous)
                             .fill(DesignTokens.primaryButtonGradient)
-                        // inset 0 1px 0 rgba(255,255,255,.3) top highlight.
                         RoundedRectangle(cornerRadius: DesignTokens.Radius.primaryButton, style: .continuous)
                             .strokeBorder(Color.white.opacity(0.3), lineWidth: 1)
                             .mask(LinearGradient(colors: [.white, .clear], startPoint: .top, endPoint: .center))
@@ -366,7 +469,6 @@ private struct AccentButtonStyle: ButtonStyle {
     }
 }
 
-/// Red-tint destructive button (Stop Server).
 private struct StopButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         Content(configuration: configuration)
@@ -396,7 +498,6 @@ private struct StopButtonStyle: ButtonStyle {
     }
 }
 
-/// Transparent 38pt ghost row (Settings / Quit) with a leading icon and hover fill.
 private struct GhostRowButtonStyle: ButtonStyle {
     let baseTextColor: Color
     var hoverBg: Color = DesignTokens.surfaceHover
@@ -437,9 +538,6 @@ private struct GhostRowButtonStyle: ButtonStyle {
 
 // MARK: - Translucent blur backing
 
-/// `NSVisualEffectView` behind the panel to approximate `backdrop-filter: blur(30px)`.
-/// The gradient over it is ~95% opaque (per spec), so the blur reads as a subtle
-/// translucency rather than a full vibrancy.
 private struct VisualEffectBackground: NSViewRepresentable {
     func makeNSView(context: Context) -> NSVisualEffectView {
         let view = NSVisualEffectView()

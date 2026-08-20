@@ -40,7 +40,6 @@ class TouchSerializerTest {
     fun `serialize batch includes count header`() {
         val events = listOf(createTestEvent(), createTestEvent())
         val bytes = TouchSerializer.serializeBatch(events)
-        // 2 bytes count + 2 * 20 bytes events = 42
         assertEquals(2 + 2 * TouchEvent.SERIALIZED_SIZE, bytes.size)
     }
 
@@ -60,11 +59,8 @@ class TouchSerializerTest {
         }
     }
 
-    // ---- Golden vector (authoritative wire bytes) ----
-
     @Test
     fun `serialize matches golden vector`() {
-        // MOVE(0x02), x=0.5, y=0.25, pressure=32768, pointerId=1, ts=1234567890123456us
         val event = TouchEvent(
             action = TouchEvent.Action.MOVE,
             x = 0.5f,
@@ -91,7 +87,6 @@ class TouchSerializerTest {
             com.desklink.android.domain.model.MessageType.TOUCH_EVENT,
             TouchSerializer.serialize(event),
         )
-        // 0000001520 + the 20 payload bytes
         assertEquals(
             "0000001520023F0000003E800000800001000462D53C8ABAC0",
             framed.toHex(),

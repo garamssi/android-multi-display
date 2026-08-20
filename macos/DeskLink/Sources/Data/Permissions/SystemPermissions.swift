@@ -3,13 +3,6 @@ import ApplicationServices
 import CoreGraphics
 import AppKit
 
-/// `PermissionsManaging` backed by the real macOS APIs.
-///
-/// - Accessibility: `AXIsProcessTrusted()` checks; the prompt reuses
-///   `CGEventInjector.requestAccessibility()` so there is a single source of truth for
-///   how the app registers itself in the Accessibility list.
-/// - Screen Recording: `CGPreflightScreenCaptureAccess()` checks WITHOUT prompting;
-///   `CGRequestScreenCaptureAccess()` prompts (both available since macOS 10.15).
 public final class SystemPermissions: PermissionsManaging {
 
     public init() {}
@@ -40,9 +33,6 @@ public final class SystemPermissions: PermissionsManaging {
 
     // MARK: - Deep links
 
-    /// System Settings deep-link anchors. Stable across Ventura–Sequoia; if a future
-    /// macOS renames the anchor, only these constants change. `open` falls back to the
-    /// Privacy & Security root so the button still lands the user somewhere useful.
     static let accessibilityURL = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
     static let screenRecordingURL = "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
     static let privacyRootURL = "x-apple.systempreferences:com.apple.preference.security"

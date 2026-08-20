@@ -30,7 +30,7 @@ final class StreamAudioUseCaseTests: XCTestCase {
         func connectClient() { connectionContinuation.yield(ClientConnection()) }
         func endConnections() { connectionContinuation.finish() }
 
-        func start(port: UInt16) async throws {}
+        func start(port: UInt16, scope: ListenerScope) async throws {}
         func stop() async {}
         func send(data: Data, type: MessageType) async throws {
             lock.withLock { sentMessages.append(Sent(type: type, data: data)) }

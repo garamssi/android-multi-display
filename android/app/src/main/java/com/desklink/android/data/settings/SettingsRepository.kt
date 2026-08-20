@@ -2,6 +2,9 @@ package com.desklink.android.data.settings
 
 import com.desklink.android.data.device.ScreenMetricsProvider
 import com.desklink.android.domain.model.DisplayConfig
+import com.desklink.android.domain.model.DisplayRotation
+import com.desklink.android.domain.model.ProtocolConstants
+import com.desklink.android.domain.model.TransportMode
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -9,29 +12,11 @@ import kotlinx.coroutines.flow.update
 import javax.inject.Inject
 import javax.inject.Singleton
 
-/**
- * In-memory, process-lifetime holder for the user-selected [DisplayConfig].
- *
- * Shared (as a Hilt @Singleton) between the Settings screen (which mutates it) and
- * the Connection screen (which reads it to drive [DisplayConfig] into the connect
- * flow), so a selection made in Settings survives navigation back to Connection.
- *
- * The effective default is derived from the device's *real native* screen size (via
- * [ScreenMetricsProvider]) rather than a hardcoded 1920x1200, so out of the box the
- * app requests the panel's full resolution and picks a bitrate to match — fixing the
- * blur caused by the Mac rendering low and the tablet upscaling. The native size is
- * also carried on every config (`nativeWidth`/`nativeHeight`) and preserved across
- * user edits so the handshake can always advertise it.
- */
 @Singleton
 class SettingsRepository @Inject constructor(
     screenMetrics: ScreenMetricsProvider,
+    private val store: SettingsStore,
 ) {
-    /**
-     * The device's native resolution as a fully-formed default config (landscape,
-     * native bitrate). Exposed so the Settings UI can offer a "Native" preset and so
-     * every edited config keeps the same `nativeWidth`/`nativeHeight`.
-     */
     val nativeConfig: DisplayConfig =
         screenMetrics.nativeResolution().let {
             DisplayConfig.forNativeResolution(it.width, it.height)
@@ -40,50 +25,103 @@ class SettingsRepository @Inject constructor(
     val nativeWidth: Int get() = nativeConfig.width
     val nativeHeight: Int get() = nativeConfig.height
 
-    private val _config = MutableStateFlow(nativeConfig)
+    private val _config = MutableStateFlow(loadConfig())
     val config: StateFlow<DisplayConfig> = _config.asStateFlow()
 
-    /**
-     * Scroll sensitivity multiplier applied to the normalized two-finger scroll delta
-     * BEFORE it is sent to the Mac (so the Mac injects 1:1). A local input preference,
-     * not part of the negotiated video [DisplayConfig] / wire protocol.
-     */
-    private val _scrollSensitivity = MutableStateFlow(DEFAULT_SCROLL_SENSITIVITY)
+    private val _scrollSensitivity =
+        MutableStateFlow(store.getFloat(KEY_SCROLL_SENSITIVITY, DEFAULT_SCROLL_SENSITIVITY))
     val scrollSensitivity: StateFlow<Float> = _scrollSensitivity.asStateFlow()
 
-    /**
-     * Scroll direction preference, applied on the tablet before sending (like
-     * [scrollSensitivity]) so the Mac and wire protocol are unchanged. `true` = natural
-     * (content follows the fingers — the macOS default and the current behavior);
-     * `false` inverts the delta for traditional/reversed scrolling.
-     */
-    private val _naturalScroll = MutableStateFlow(DEFAULT_NATURAL_SCROLL)
+    private val _naturalScroll =
+        MutableStateFlow(store.getBoolean(KEY_NATURAL_SCROLL, DEFAULT_NATURAL_SCROLL))
     val naturalScroll: StateFlow<Boolean> = _naturalScroll.asStateFlow()
 
-    /**
-     * Whether to play the Mac's audio on this device. Like [scrollSensitivity] this is a
-     * local preference, not part of the negotiated [DisplayConfig].
-     *
-     * Defaults to ON: the Mac only sends audio when the user enabled routing there, so by
-     * the time a stream exists the intent is already established and refusing to play it
-     * would leave both machines silent.
-     */
-    private val _playMacAudio = MutableStateFlow(DEFAULT_PLAY_MAC_AUDIO)
+    private val _touchInputEnabled =
+        MutableStateFlow(store.getBoolean(KEY_TOUCH_INPUT_ENABLED, DEFAULT_TOUCH_INPUT_ENABLED))
+    val touchInputEnabled: StateFlow<Boolean> = _touchInputEnabled.asStateFlow()
+
+    private val _playMacAudio =
+        MutableStateFlow(store.getBoolean(KEY_PLAY_MAC_AUDIO, DEFAULT_PLAY_MAC_AUDIO))
     val playMacAudio: StateFlow<Boolean> = _playMacAudio.asStateFlow()
 
-    fun setResolution(width: Int, height: Int) =
+    private val _displayRotation = MutableStateFlow(loadDisplayRotation())
+    val displayRotation: StateFlow<DisplayRotation> = _displayRotation.asStateFlow()
+
+    private val _transportMode = MutableStateFlow(loadTransportMode())
+    val transportMode: StateFlow<TransportMode> = _transportMode.asStateFlow()
+
+    private val _manualHost = MutableStateFlow(store.getString(KEY_MANUAL_HOST, ""))
+    val manualHost: StateFlow<String> = _manualHost.asStateFlow()
+
+    private val _pairingPin = MutableStateFlow(store.getString(KEY_PAIRING_PIN, ""))
+    val pairingPin: StateFlow<String> = _pairingPin.asStateFlow()
+
+    private val _lastConnectedHost = MutableStateFlow(store.getString(KEY_LAST_HOST, ""))
+    val lastConnectedHost: StateFlow<String> = _lastConnectedHost.asStateFlow()
+
+    fun setResolution(width: Int, height: Int) {
         _config.update { it.copy(width = width, height = height) }
+        store.putInt(KEY_WIDTH, width)
+        store.putInt(KEY_HEIGHT, height)
+    }
 
-    fun setFps(fps: Int) = _config.update { it.copy(fps = fps) }
+    fun setFps(fps: Int) {
+        _config.update { it.copy(fps = fps) }
+        store.putInt(KEY_FPS, fps)
+    }
 
-    fun setBitrate(bitrateKbps: Int) = _config.update { it.copy(bitrateKbps = bitrateKbps) }
+    fun setBitrate(bitrateKbps: Int) {
+        _config.update { it.copy(bitrateKbps = bitrateKbps) }
+        store.putInt(KEY_BITRATE, bitrateKbps)
+    }
 
-    fun setCodec(codec: DisplayConfig.Codec) = _config.update { it.copy(codec = codec) }
+    fun setCodec(codec: DisplayConfig.Codec) {
+        _config.update { it.copy(codec = codec) }
+        store.putString(KEY_CODEC, codec.name)
+    }
 
-    fun setScrollSensitivity(value: Float) =
-        _scrollSensitivity.update { value.coerceIn(MIN_SCROLL_SENSITIVITY, MAX_SCROLL_SENSITIVITY) }
+    fun setScrollSensitivity(value: Float) {
+        val clamped = value.coerceIn(MIN_SCROLL_SENSITIVITY, MAX_SCROLL_SENSITIVITY)
+        _scrollSensitivity.update { clamped }
+        store.putFloat(KEY_SCROLL_SENSITIVITY, clamped)
+    }
 
-    fun setNaturalScroll(enabled: Boolean) = _naturalScroll.update { enabled }
+    fun setNaturalScroll(enabled: Boolean) {
+        _naturalScroll.update { enabled }
+        store.putBoolean(KEY_NATURAL_SCROLL, enabled)
+    }
+
+    fun setTouchInputEnabled(enabled: Boolean) {
+        _touchInputEnabled.update { enabled }
+        store.putBoolean(KEY_TOUCH_INPUT_ENABLED, enabled)
+    }
+
+    fun setPlayMacAudio(enabled: Boolean) {
+        _playMacAudio.update { enabled }
+        store.putBoolean(KEY_PLAY_MAC_AUDIO, enabled)
+    }
+
+    fun setDisplayRotation(rotation: DisplayRotation) {
+        _displayRotation.update { rotation }
+        store.putInt(KEY_DISPLAY_ROTATION, rotation.degrees)
+    }
+
+    fun setTransportMode(mode: TransportMode) {
+        _transportMode.update { mode }
+        store.putString(KEY_TRANSPORT_MODE, mode.name)
+    }
+
+    fun setManualHost(value: String) {
+        val trimmed = value.trim()
+        _manualHost.update { trimmed }
+        store.putString(KEY_MANUAL_HOST, trimmed)
+    }
+
+    fun setPairingPin(value: String) {
+        val digits = value.filter { it.isDigit() }.take(ProtocolConstants.PAIRING_PIN_LENGTH)
+        _pairingPin.update { digits }
+        store.putString(KEY_PAIRING_PIN, digits)
+    }
 
     fun current(): DisplayConfig = _config.value
 
@@ -91,18 +129,69 @@ class SettingsRepository @Inject constructor(
 
     fun currentNaturalScroll(): Boolean = _naturalScroll.value
 
-    fun setPlayMacAudio(enabled: Boolean) = _playMacAudio.update { enabled }
+    fun currentTouchInputEnabled(): Boolean = _touchInputEnabled.value
 
     fun currentPlayMacAudio(): Boolean = _playMacAudio.value
+
+    fun currentDisplayRotation(): DisplayRotation = _displayRotation.value
+
+    fun currentTransportMode(): TransportMode = _transportMode.value
+
+    fun currentManualHost(): String = _manualHost.value
+
+    fun currentPairingPin(): String = _pairingPin.value
+
+    fun setLastConnectedHost(host: String) {
+        val trimmed = host.trim()
+        _lastConnectedHost.update { trimmed }
+        store.putString(KEY_LAST_HOST, trimmed)
+    }
+
+    fun currentLastConnectedHost(): String = _lastConnectedHost.value
+
+    private fun loadConfig(): DisplayConfig = nativeConfig.copy(
+        width = store.getInt(KEY_WIDTH, nativeConfig.width),
+        height = store.getInt(KEY_HEIGHT, nativeConfig.height),
+        fps = store.getInt(KEY_FPS, nativeConfig.fps),
+        bitrateKbps = store.getInt(KEY_BITRATE, nativeConfig.bitrateKbps),
+        codec = runCatching { DisplayConfig.Codec.valueOf(store.getString(KEY_CODEC, nativeConfig.codec.name)) }
+            .getOrDefault(nativeConfig.codec),
+    )
+
+    private fun loadTransportMode(): TransportMode =
+        runCatching { TransportMode.valueOf(store.getString(KEY_TRANSPORT_MODE, DEFAULT_TRANSPORT_MODE.name)) }
+            .getOrDefault(DEFAULT_TRANSPORT_MODE)
+
+    private fun loadDisplayRotation(): DisplayRotation =
+        DisplayRotation.fromDegrees(store.getInt(KEY_DISPLAY_ROTATION, DEFAULT_DISPLAY_ROTATION.degrees))
 
     companion object {
         const val MIN_SCROLL_SENSITIVITY = 1.0f
         const val MAX_SCROLL_SENSITIVITY = 6.0f
-        /** Matches the previous fixed Mac-side gain, so default feel is unchanged. */
         const val DEFAULT_SCROLL_SENSITIVITY = 3.0f
-        /** Natural scrolling on by default (macOS default, current behavior). */
         const val DEFAULT_NATURAL_SCROLL = true
+        const val DEFAULT_TOUCH_INPUT_ENABLED = true
 
+        // On by default: the Mac only opens the audio channel when the user enabled
+        // routing there, so refusing to play it would leave both machines silent.
         const val DEFAULT_PLAY_MAC_AUDIO = true
+        val DEFAULT_DISPLAY_ROTATION = DisplayRotation.ROTATION_0
+        val DEFAULT_TRANSPORT_MODE = TransportMode.USB
+
+
+        private const val KEY_WIDTH = "width"
+        private const val KEY_HEIGHT = "height"
+        private const val KEY_FPS = "fps"
+        private const val KEY_BITRATE = "bitrateKbps"
+        private const val KEY_CODEC = "codec"
+        private const val KEY_SCROLL_SENSITIVITY = "scrollSensitivity"
+        private const val KEY_NATURAL_SCROLL = "naturalScroll"
+        private const val KEY_TOUCH_INPUT_ENABLED = "touchInputEnabled"
+        private const val KEY_PLAY_MAC_AUDIO = "playMacAudio"
+        private const val KEY_DISPLAY_ROTATION = "displayRotationDegrees"
+        private const val KEY_TRANSPORT_MODE = "transportMode"
+        private const val KEY_MANUAL_HOST = "manualHost"
+        private const val KEY_PAIRING_PIN = "pairingPin"
+        private const val KEY_LAST_HOST = "lastConnectedHost"
     }
 }

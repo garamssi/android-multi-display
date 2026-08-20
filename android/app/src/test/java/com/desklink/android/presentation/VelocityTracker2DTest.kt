@@ -6,10 +6,6 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import kotlin.math.abs
 
-/**
- * The velocity estimate must converge to the sustained speed (normalized units/ms),
- * decay toward zero when the finger stalls, reset cleanly, and ignore non-positive dt.
- */
 class VelocityTracker2DTest {
 
     @Test
@@ -26,7 +22,6 @@ class VelocityTracker2DTest {
         val tracker = VelocityTracker2D()
         repeat(20) { tracker.track(0f, 0.02f, 16L) }
         val moving = abs(tracker.velocityY)
-        // Finger holds still: several zero-delta samples arrive before the lift.
         repeat(10) { tracker.track(0f, 0f, 16L) }
         assertTrue(abs(tracker.velocityY) < moving * 0.1f, "velocity should collapse after a stall")
     }

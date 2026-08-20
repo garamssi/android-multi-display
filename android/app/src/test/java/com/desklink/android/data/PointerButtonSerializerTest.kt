@@ -7,8 +7,7 @@ import org.junit.jupiter.api.Test
 
 class PointerButtonSerializerTest {
 
-    /** Must match tools/protocol_vectors.py POINTER_BUTTON(RIGHT, DOWN, 0.5, 0.25) =
-     *  01003F0000003E800000 and the Swift PointerButtonCoderTests golden vector. */
+    // Must match tools/protocol_vectors.py POINTER_BUTTON(RIGHT, DOWN, 0.5, 0.25) golden vector.
     @Test
     fun `serialize matches golden vector`() {
         val bytes = PointerButtonSerializer.serialize(

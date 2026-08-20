@@ -1,22 +1,16 @@
 import Foundation
 import Network
+import Security
 
-/// TCP server for streaming data to (and receiving bytes from) an Android client
-/// over loopback (ADB forwarding).
-///
-/// The client-connection `AsyncStream` and the received-bytes `AsyncStream`, along
-/// with their continuations, are created **once** in `init` and stored, so every
-/// access returns the same live stream (S-H1). The previous computed-property
-/// pattern rebuilt the stream on each access and overwrote the continuation,
-/// dropping earlier subscribers.
-///
-/// The server is bidirectional: `send` writes framed packets, and a receive loop
-/// yields raw inbound bytes via `receivedBytes` (see `PacketReceiving`) for the
-/// control and input channels.
+// S-H1: the connection and received-bytes AsyncStreams + continuations are created once in init and stored; rebuilding per access overwrites the continuation and drops subscribers.
 public final class TCPServer: StreamServing, PacketReceiving, @unchecked Sendable {
     private var listener: NWListener?
     private var activeConnection: NWConnection?
     private let lock = NSLock()
+
+    private var bonjourServiceType: String?
+
+    private var bonjourOsVersion: String?
 
     private let connectionStream: AsyncStream<ClientConnection>
     private let connectionContinuation: AsyncStream<ClientConnection>.Continuation
@@ -51,18 +45,47 @@ public final class TCPServer: StreamServing, PacketReceiving, @unchecked Sendabl
         bytesContinuation.finish()
     }
 
-    public func start(port: UInt16) async throws {
-        try lock.withLock {
-            let params = NWParameters.tcp
-            params.requiredInterfaceType = .loopback // localhost only (ADB forwarding)
+    public func advertiseBonjour(serviceType: String?, osVersion: String?) {
+        lock.withLock {
+            bonjourServiceType = serviceType
+            bonjourOsVersion = osVersion
+        }
+    }
 
-            // Set TCP_NODELAY
-            if let tcpOptions = params.defaultProtocolStack.transportProtocol as? NWProtocolTCP.Options {
-                tcpOptions.noDelay = true
+    public func start(port: UInt16, scope: ListenerScope) async throws {
+        try lock.withLock {
+            let tcpOptions = NWProtocolTCP.Options()
+            tcpOptions.noDelay = true
+
+            let params: NWParameters
+            switch scope {
+            case .loopback:
+                params = NWParameters(tls: nil, tcp: tcpOptions)
+                params.requiredInterfaceType = .loopback
+            case .localNetwork:
+                if let identity = TlsIdentity.loadSecIdentity() {
+                    let tls = NWProtocolTLS.Options()
+                    sec_protocol_options_set_local_identity(tls.securityProtocolOptions, identity)
+                    params = NWParameters(tls: tls, tcp: tcpOptions)
+                    Log.info(.server, "LAN listener: TLS enabled")
+                } else {
+                    params = NWParameters(tls: nil, tcp: tcpOptions)
+                    Log.error(.server, "LAN TLS identity not found — run scripts/create_tls_cert.sh. Serving PLAINTEXT.")
+                }
             }
 
             let nwPort = NWEndpoint.Port(rawValue: port)!
             let newListener = try NWListener(using: params, on: nwPort)
+
+            // Bonjour advertisement requires NSBonjourServices + NSLocalNetworkUsageDescription in Info.plist.
+            if let serviceType = bonjourServiceType {
+                if let osVersion = bonjourOsVersion {
+                    let txt = NWTXTRecord([ProtocolConstants.bonjourTxtKeyOS: osVersion])
+                    newListener.service = NWListener.Service(type: serviceType, txtRecord: txt)
+                } else {
+                    newListener.service = NWListener.Service(type: serviceType)
+                }
+            }
 
             newListener.stateUpdateHandler = { [weak self] state in
                 switch state {
@@ -91,9 +114,7 @@ public final class TCPServer: StreamServing, PacketReceiving, @unchecked Sendabl
             listener?.cancel()
             listener = nil
         }
-        // Note: the streams are intentionally NOT finished here so the server can
-        // be started again and continue delivering connections/bytes. They are
-        // finished only in deinit.
+        // Streams intentionally NOT finished here so the server can be restarted; they are finished only in deinit.
     }
 
     public func send(data: Data, type: MessageType) async throws {
@@ -119,11 +140,9 @@ public final class TCPServer: StreamServing, PacketReceiving, @unchecked Sendabl
 
     private func handleNewConnection(_ connection: NWConnection) {
         lock.withLock {
-            // Only allow one client at a time
             activeConnection?.cancel()
             activeConnection = connection
 
-            // Configure connection
             connection.stateUpdateHandler = { [weak self] state in
                 guard let self else { return }
                 switch state {
@@ -145,8 +164,6 @@ public final class TCPServer: StreamServing, PacketReceiving, @unchecked Sendabl
         }
     }
 
-    /// Continuously reads inbound bytes and yields them raw to `receivedBytes`.
-    /// Framing/parsing is done downstream by `FrameAccumulator`.
     private func startReceiveLoop(on connection: NWConnection) {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { [weak self] data, _, isComplete, error in
             guard let self else { return }
@@ -156,11 +173,9 @@ public final class TCPServer: StreamServing, PacketReceiving, @unchecked Sendabl
             }
 
             if isComplete || error != nil {
-                // Connection closed or errored; stop reading.
                 return
             }
 
-            // Keep reading only while this is still the active connection.
             let stillActive = self.lock.withLock { self.activeConnection === connection }
             if stillActive {
                 self.startReceiveLoop(on: connection)

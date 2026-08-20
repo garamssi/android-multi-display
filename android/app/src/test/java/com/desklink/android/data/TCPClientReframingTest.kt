@@ -3,6 +3,7 @@ package com.desklink.android.data
 import com.desklink.android.data.network.PacketFramer
 import com.desklink.android.data.network.PacketFramingException
 import com.desklink.android.data.network.TCPClient
+import com.desklink.android.data.security.PlaintextSecureChannel
 import com.desklink.android.domain.model.MessageType
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
@@ -13,14 +14,8 @@ import org.junit.jupiter.api.Test
 import java.io.ByteArrayInputStream
 import java.io.InputStream
 
-/**
- * A-C1 regression tests: TCPClient must reassemble multiple frames across partial
- * (tiny-chunk) reads and handle a single large frame — without O(n^2) recopying
- * and without frame loss.
- */
 class TCPClientReframingTest {
 
-    /** InputStream that hands out at most [chunk] bytes per read() call. */
     private class ChunkedInputStream(data: ByteArray, private val chunk: Int) : InputStream() {
         private val delegate = ByteArrayInputStream(data)
         override fun read(): Int = delegate.read()
@@ -35,7 +30,7 @@ class TCPClientReframingTest {
         val p3 = PacketFramer.frame(MessageType.VIDEO_FRAME, ByteArray(200) { it.toByte() })
         val stream = ChunkedInputStream(p1 + p2 + p3, chunk = 1)
 
-        val packets = TCPClient().framedPackets(stream).toList()
+        val packets = TCPClient(PlaintextSecureChannel()).framedPackets(stream).toList()
 
         assertEquals(3, packets.size)
         assertEquals(MessageType.PING, packets[0].first)
@@ -48,13 +43,11 @@ class TCPClientReframingTest {
 
     @Test
     fun `reassembles a large frame split across many reads`() = runTest {
-        // ~512KB payload — larger than the internal read chunk, forcing buffer growth
-        // and confirming a single large frame is reassembled intact.
         val bigPayload = ByteArray(512 * 1024) { (it % 251).toByte() }
         val packet = PacketFramer.frame(MessageType.VIDEO_FRAME, bigPayload)
         val stream = ChunkedInputStream(packet, chunk = 7000)
 
-        val packets = TCPClient().framedPackets(stream).toList()
+        val packets = TCPClient(PlaintextSecureChannel()).framedPackets(stream).toList()
 
         assertEquals(1, packets.size)
         assertEquals(MessageType.VIDEO_FRAME, packets[0].first)
@@ -72,7 +65,7 @@ class TCPClientReframingTest {
         val combined = frames.reduce { acc, bytes -> acc + bytes }
         val stream = ChunkedInputStream(combined, chunk = 333)
 
-        val packets = TCPClient().framedPackets(stream).toList()
+        val packets = TCPClient(PlaintextSecureChannel()).framedPackets(stream).toList()
 
         assertEquals(4, packets.size)
         assertEquals(MessageType.PING, packets[0].first)
@@ -87,11 +80,10 @@ class TCPClientReframingTest {
 
     @Test
     fun `framing error throws typed PacketFramingException`() = runTest {
-        // Length field of 0 is invalid (< 1) -> PacketFramer returns Error.
         val badHeader = byteArrayOf(0x00, 0x00, 0x00, 0x00, 0x07)
         val stream = ChunkedInputStream(badHeader, chunk = 5)
 
-        val thrown = runCatching { TCPClient().framedPackets(stream).toList() }.exceptionOrNull()
+        val thrown = runCatching { TCPClient(PlaintextSecureChannel()).framedPackets(stream).toList() }.exceptionOrNull()
         assertTrue(
             thrown is PacketFramingException,
             "expected PacketFramingException, got $thrown",

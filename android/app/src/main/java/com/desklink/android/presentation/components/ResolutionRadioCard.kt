@@ -22,12 +22,6 @@ import androidx.compose.ui.unit.sp
 import com.desklink.android.presentation.theme.DeskLinkTokens
 import com.desklink.android.presentation.theme.PlexSans
 
-/**
- * A single resolution preset card (radio dot + name + mono resolution value).
- *
- * Selected: border `rgba(124,134,255,.5)`, bg `rgba(124,134,255,.1)`, filled radio.
- * Unselected: border `rgba(255,255,255,.08)`, bg `rgba(255,255,255,.03)`, hollow radio.
- */
 @Composable
 fun ResolutionRadioCard(
     name: String,
@@ -68,7 +62,6 @@ fun ResolutionRadioCard(
     }
 }
 
-/** A 20dp radio indicator: 2dp ring, filled 9dp center when selected. */
 @Composable
 private fun RadioDot(selected: Boolean, modifier: Modifier = Modifier) {
     val ringColor = if (selected) DeskLinkTokens.AccentLight else DeskLinkTokens.Border16.copy(alpha = 0.22f)

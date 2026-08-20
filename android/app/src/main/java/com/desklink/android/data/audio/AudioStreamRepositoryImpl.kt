@@ -5,6 +5,7 @@ import com.desklink.android.data.network.TCPClient
 import com.desklink.android.domain.model.MessageType
 import com.desklink.android.domain.model.ProtocolConstants
 import com.desklink.android.domain.repository.AudioStreamRepository
+import com.desklink.android.domain.transport.Transport
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
@@ -30,6 +31,7 @@ import javax.inject.Inject
  */
 class AudioStreamRepositoryImpl @Inject constructor(
     private val audioClient: TCPClient,
+    private val transport: Transport,
 ) : AudioStreamRepository {
 
     private companion object {
@@ -83,8 +85,10 @@ class AudioStreamRepositoryImpl @Inject constructor(
         var framesBeforeConfig = 0
         var ownPlayer: AudioTrackPlayer? = null
         try {
-            Log.i(TAG, "connecting audio channel to 127.0.0.1:${ProtocolConstants.PORT_AUDIO}")
-            audioClient.connect(ProtocolConstants.PORT_AUDIO)
+            val host = transport.host()
+            val port = transport.audioPort()
+            Log.i(TAG, "connecting audio channel to $host:$port")
+            audioClient.connect(host, port)
 
             audioClient.receivePackets().collect { (type, payload) ->
                 when (type) {

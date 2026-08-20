@@ -1,11 +1,17 @@
 package com.desklink.android.presentation.settings
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -17,25 +23,39 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Cable
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.ChevronLeft
 import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Warning
+import androidx.compose.material.icons.outlined.Wifi
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.compose.ui.graphics.SolidColor
 import com.desklink.android.domain.model.DisplayConfig
+import com.desklink.android.domain.model.DisplayRotation
+import com.desklink.android.domain.model.TransportMode
+import com.desklink.android.domain.transport.DiscoveredServer
 import com.desklink.android.presentation.components.GhostTextButton
 import com.desklink.android.presentation.components.MonoText
 import com.desklink.android.presentation.components.ResolutionRadioCard
@@ -44,7 +64,6 @@ import com.desklink.android.presentation.components.StatusDot
 import com.desklink.android.presentation.theme.DeskLinkTokens
 import com.desklink.android.presentation.theme.PlexSans
 
-/** A resolution option shown as a radio card (dynamic list, derived from native). */
 private data class ResolutionOption(
     val name: String,
     val width: Int,
@@ -52,7 +71,6 @@ private data class ResolutionOption(
     val isNative: Boolean,
 )
 
-/** Friendly names for the standard presets. */
 private fun presetName(width: Int, height: Int): String = when {
     width >= 2560 -> "QHD"
     width >= 1920 -> "FHD+"
@@ -65,10 +83,8 @@ fun SettingsScreen(
     viewModel: SettingsViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsState()
+    val discoveredServers by viewModel.discoveredServers.collectAsState()
 
-    // Resolution options are DERIVED from the detected native panel size: "Native"
-    // first, then standard presets that are <= native (capped at native), with any
-    // preset equal to native folded into the Native card.
     val resolutionOptions = buildList {
         add(ResolutionOption("Native", state.nativeWidth, state.nativeHeight, isNative = true))
         SettingsUiState.RESOLUTION_PRESETS
@@ -90,15 +106,12 @@ fun SettingsScreen(
             SettingsHeader(
                 onBack = onBack,
                 onReset = {
-                    // Restore the repository's native-derived defaults using only the
-                    // existing setters (keeps the ViewModel/option→config mapping intact).
                     viewModel.useNativeResolution()
                     viewModel.setFps(60)
                     viewModel.setCodec(DisplayConfig.Codec.HEVC)
                     viewModel.setBitrate(DisplayConfig.recommendedBitrateKbps(state.nativeWidth))
                 },
             )
-            // Header bottom divider (spec: 1px rgba(255,255,255,.06)).
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -106,69 +119,124 @@ fun SettingsScreen(
                     .background(DeskLinkTokens.Border06),
             )
 
-            // Adaptive body: two columns on wide tablets, stacked on narrow ones. The
-            // whole body scrolls so it holds across any aspect ratio.
-            androidx.compose.foundation.layout.BoxWithConstraints(
-                modifier = Modifier.fillMaxSize(),
-            ) {
-                val wide = maxWidth >= 720.dp
+            BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+                val twoColumn = maxWidth >= 1024.dp
+                val small = maxWidth < 600.dp
                 val scroll = rememberScrollState()
-                if (wide) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .verticalScroll(scroll)
-                            .padding(horizontal = 34.dp, vertical = 30.dp),
-                        horizontalArrangement = Arrangement.spacedBy(36.dp),
-                    ) {
-                        ResolutionColumn(
-                            modifier = Modifier.weight(1f),
-                            options = resolutionOptions,
-                            selectedWidth = state.width,
-                            selectedHeight = state.height,
-                            isNativeSelected = state.isNativeSelected,
-                            onSelectNative = viewModel::useNativeResolution,
-                            onSelectPreset = viewModel::setResolution,
-                        )
-                        StreamColumn(
-                            modifier = Modifier.weight(1f),
-                            state = state,
-                            onSetFps = viewModel::setFps,
-                            onSetBitrate = viewModel::setBitrate,
-                            onSetCodec = viewModel::setCodec,
-                            onSetScrollSensitivity = viewModel::setScrollSensitivity,
-                            onSetNaturalScroll = viewModel::setNaturalScroll,
-                            onSetPlayMacAudio = viewModel::setPlayMacAudio,
+
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .verticalScroll(scroll)
+                        .padding(
+                            horizontal = if (twoColumn) 34.dp else if (small) 20.dp else 24.dp,
+                            vertical = if (twoColumn) 30.dp else 26.dp,
+                        ),
+                    verticalArrangement = Arrangement.spacedBy(30.dp),
+                ) {
+                    Column {
+                        SectionLabel("Connection")
+                        Spacer(Modifier.height(12.dp))
+                        ConnectionSegmented(
+                            transportMode = state.transportMode,
+                            onSelect = viewModel::setTransportMode,
                         )
                     }
-                } else {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .verticalScroll(scroll)
-                            .padding(horizontal = 24.dp, vertical = 26.dp),
-                        verticalArrangement = Arrangement.spacedBy(30.dp),
-                    ) {
-                        ResolutionColumn(
-                            options = resolutionOptions,
-                            selectedWidth = state.width,
-                            selectedHeight = state.height,
-                            isNativeSelected = state.isNativeSelected,
-                            onSelectNative = viewModel::useNativeResolution,
-                            onSelectPreset = viewModel::setResolution,
+
+                    if (state.transportMode == TransportMode.USB) {
+                        AdaptiveTwoColumn(
+                            twoColumn = twoColumn,
+                            left = { m ->
+                                ResolutionColumn(
+                                    modifier = m,
+                                    options = resolutionOptions,
+                                    selectedWidth = state.width,
+                                    selectedHeight = state.height,
+                                    isNativeSelected = state.isNativeSelected,
+                                    singleColumn = small,
+                                    onSelectNative = viewModel::useNativeResolution,
+                                    onSelectPreset = viewModel::setResolution,
+                                )
+                            },
+                            right = { m ->
+                                StreamColumn(
+                                    modifier = m,
+                                    state = state,
+                                    onSetFps = viewModel::setFps,
+                                    onSetBitrate = viewModel::setBitrate,
+                                    onSetCodec = viewModel::setCodec,
+                                    onSetScrollSensitivity = viewModel::setScrollSensitivity,
+                                    onSetNaturalScroll = viewModel::setNaturalScroll,
+                                    onSetTouchInput = viewModel::setTouchInputEnabled,
+                                    onSetRotation = viewModel::setDisplayRotation,
+                                    onSetPlayMacAudio = viewModel::setPlayMacAudio,
+                                )
+                            },
                         )
-                        StreamColumn(
-                            state = state,
-                            onSetFps = viewModel::setFps,
-                            onSetBitrate = viewModel::setBitrate,
-                            onSetCodec = viewModel::setCodec,
-                            onSetScrollSensitivity = viewModel::setScrollSensitivity,
-                            onSetNaturalScroll = viewModel::setNaturalScroll,
-                            onSetPlayMacAudio = viewModel::setPlayMacAudio,
+                    } else {
+                        AdaptiveTwoColumn(
+                            twoColumn = twoColumn,
+                            left = { m ->
+                                WifiConnectionColumn(
+                                    modifier = m,
+                                    manualHost = state.manualHost,
+                                    discoveredServers = discoveredServers,
+                                    onManualHostChange = viewModel::setManualHost,
+                                    onStartDiscovery = viewModel::startDiscovery,
+                                    onStopDiscovery = viewModel::stopDiscovery,
+                                    onSelectServer = viewModel::selectDiscoveredServer,
+                                )
+                            },
+                            right = { m ->
+                                Column(modifier = m, verticalArrangement = Arrangement.spacedBy(26.dp)) {
+                                    ResolutionColumn(
+                                        options = resolutionOptions,
+                                        selectedWidth = state.width,
+                                        selectedHeight = state.height,
+                                        isNativeSelected = state.isNativeSelected,
+                                        singleColumn = small,
+                                        onSelectNative = viewModel::useNativeResolution,
+                                        onSelectPreset = viewModel::setResolution,
+                                    )
+                                    StreamColumn(
+                                        state = state,
+                                        onSetFps = viewModel::setFps,
+                                        onSetBitrate = viewModel::setBitrate,
+                                        onSetCodec = viewModel::setCodec,
+                                        onSetScrollSensitivity = viewModel::setScrollSensitivity,
+                                        onSetNaturalScroll = viewModel::setNaturalScroll,
+                                        onSetTouchInput = viewModel::setTouchInputEnabled,
+                                        onSetRotation = viewModel::setDisplayRotation,
+                                    onSetPlayMacAudio = viewModel::setPlayMacAudio,
+                                    )
+                                }
+                            },
                         )
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun AdaptiveTwoColumn(
+    twoColumn: Boolean,
+    left: @Composable (Modifier) -> Unit,
+    right: @Composable (Modifier) -> Unit,
+) {
+    if (twoColumn) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(36.dp),
+        ) {
+            left(Modifier.weight(1f))
+            right(Modifier.weight(1f))
+        }
+    } else {
+        Column(verticalArrangement = Arrangement.spacedBy(30.dp)) {
+            left(Modifier.fillMaxWidth())
+            right(Modifier.fillMaxWidth())
         }
     }
 }
@@ -208,10 +276,64 @@ private fun SettingsHeader(onBack: () -> Unit, onReset: () -> Unit) {
             fontWeight = FontWeight.W600,
         )
         Spacer(Modifier.weight(1f))
-        GhostTextButton(
-            text = "Reset to defaults",
-            onClick = onReset,
-            fontSize = 14.sp,
+        GhostTextButton(text = "Reset to defaults", onClick = onReset, fontSize = 14.sp)
+    }
+}
+
+@Composable
+private fun ConnectionSegmented(
+    transportMode: TransportMode,
+    onSelect: (TransportMode) -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .clip(DeskLinkTokens.ShapeSegmentTrack)
+            .background(DeskLinkTokens.Surface05, DeskLinkTokens.ShapeSegmentTrack)
+            .border(BorderStroke(1.dp, DeskLinkTokens.Border07), DeskLinkTokens.ShapeSegmentTrack)
+            .padding(4.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        ConnSegment(Icons.Outlined.Cable, "USB", transportMode == TransportMode.USB) {
+            onSelect(TransportMode.USB)
+        }
+        ConnSegment(Icons.Outlined.Wifi, "Wi-Fi (LAN)", transportMode == TransportMode.LAN) {
+            onSelect(TransportMode.LAN)
+        }
+    }
+}
+
+@Composable
+private fun ConnSegment(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    val base = Modifier
+        .height(44.dp)
+        .clip(DeskLinkTokens.ShapeSegment)
+    val styled = if (selected) {
+        base.background(DeskLinkTokens.AccentVertical, DeskLinkTokens.ShapeSegment)
+    } else {
+        base
+    }
+    Row(
+        modifier = styled.clickable(onClick = onClick).padding(horizontal = 26.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = if (selected) Color.White else DeskLinkTokens.TextSecondary,
+            modifier = Modifier.size(16.dp),
+        )
+        Text(
+            text = label,
+            color = if (selected) Color.White else DeskLinkTokens.TextSecondary,
+            fontFamily = PlexSans,
+            fontSize = 14.5.sp,
+            fontWeight = if (selected) FontWeight.W600 else FontWeight.W500,
         )
     }
 }
@@ -223,14 +345,15 @@ private fun ResolutionColumn(
     selectedWidth: Int,
     selectedHeight: Int,
     isNativeSelected: Boolean,
+    singleColumn: Boolean,
     onSelectNative: () -> Unit,
     onSelectPreset: (Int, Int) -> Unit,
 ) {
+    val perRow = if (singleColumn) 1 else 2
     Column(modifier = modifier) {
         SectionLabel("Resolution")
         Spacer(Modifier.height(14.dp))
-        // 2-column grid of radio cards.
-        options.chunked(2).forEach { rowItems ->
+        options.chunked(perRow).forEach { rowItems ->
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(11.dp),
@@ -251,8 +374,9 @@ private fun ResolutionColumn(
                         modifier = Modifier.weight(1f),
                     )
                 }
-                // Balance a trailing odd card so widths stay equal.
-                if (rowItems.size == 1) Spacer(Modifier.weight(1f))
+                if (rowItems.size < perRow) {
+                    repeat(perRow - rowItems.size) { Spacer(Modifier.weight(1f)) }
+                }
             }
             Spacer(Modifier.height(11.dp))
         }
@@ -272,13 +396,14 @@ private fun StreamColumn(
     onSetCodec: (DisplayConfig.Codec) -> Unit,
     onSetScrollSensitivity: (Float) -> Unit,
     onSetNaturalScroll: (Boolean) -> Unit,
+    onSetTouchInput: (Boolean) -> Unit,
+    onSetRotation: (DisplayRotation) -> Unit,
     onSetPlayMacAudio: (Boolean) -> Unit,
 ) {
     Column(
         modifier = modifier,
         verticalArrangement = Arrangement.spacedBy(26.dp),
     ) {
-        // Frame rate.
         Column {
             SectionLabel("Frame rate")
             Spacer(Modifier.height(14.dp))
@@ -291,7 +416,6 @@ private fun StreamColumn(
             }
         }
 
-        // Bitrate (58dp, two-line).
         Column {
             SectionLabel("Bitrate")
             Spacer(Modifier.height(14.dp))
@@ -322,7 +446,6 @@ private fun StreamColumn(
             }
         }
 
-        // Codec.
         Column {
             SectionLabel("Codec")
             Spacer(Modifier.height(14.dp))
@@ -336,14 +459,11 @@ private fun StreamColumn(
             }
         }
 
-        // Scroll speed (input preference: multiplier applied to two-finger scroll).
         Column {
             SectionLabel("Scroll speed")
             Spacer(Modifier.height(14.dp))
             SegmentedControl(
                 options = SettingsUiState.SCROLL_SPEED_OPTIONS,
-                // A persisted value is always one of the presets; fall back to the
-                // default-sensitivity preset rather than a bare index if it ever isn't.
                 selected = SettingsUiState.SCROLL_SPEED_OPTIONS
                     .firstOrNull { it.sensitivity == state.scrollSensitivity }
                     ?: SettingsUiState.SCROLL_SPEED_OPTIONS
@@ -354,7 +474,6 @@ private fun StreamColumn(
             }
         }
 
-        // Scroll direction (Natural follows the fingers; Reversed inverts it).
         Column {
             SectionLabel("Scroll direction")
             Spacer(Modifier.height(14.dp))
@@ -368,8 +487,33 @@ private fun StreamColumn(
             }
         }
 
-        // Mac audio. Only takes effect when the Mac is also routing audio here; with
-        // routing off the Mac never opens the audio channel and this has no effect.
+        Column {
+            SectionLabel("Touch input")
+            Spacer(Modifier.height(14.dp))
+            SegmentedControl(
+                options = SettingsUiState.TOUCH_INPUT_OPTIONS,
+                selected = SettingsUiState.TOUCH_INPUT_OPTIONS
+                    .first { it.enabled == state.touchInputEnabled },
+                onSelect = { onSetTouchInput(it.enabled) },
+            ) { option, isSelected ->
+                SegmentLabel(text = option.label, isSelected = isSelected)
+            }
+        }
+
+        Column {
+            SectionLabel("Rotation")
+            Spacer(Modifier.height(14.dp))
+            SegmentedControl(
+                options = SettingsUiState.ROTATION_OPTIONS,
+                selected = state.rotation,
+                onSelect = onSetRotation,
+            ) { rotation, isSelected ->
+                SegmentLabel(text = "${rotation.degrees}°", isSelected = isSelected)
+            }
+        }
+
+        // Only has an effect while the Mac is routing audio here; with routing off the Mac
+        // never opens the audio channel.
         Column {
             SectionLabel("Mac audio")
             Spacer(Modifier.height(14.dp))
@@ -382,12 +526,182 @@ private fun StreamColumn(
             }
         }
 
-        // Estimated-stream summary chip (green-tinted).
         SummaryChip(state = state)
     }
 }
 
-/** Single-line segment interior with a leading check when selected. */
+@Composable
+private fun WifiConnectionColumn(
+    modifier: Modifier = Modifier,
+    manualHost: String,
+    discoveredServers: List<DiscoveredServer>,
+    onManualHostChange: (String) -> Unit,
+    onStartDiscovery: () -> Unit,
+    onStopDiscovery: () -> Unit,
+    onSelectServer: (DiscoveredServer) -> Unit,
+) {
+    Column(modifier = modifier) {
+        SectionLabel("Server address")
+        Spacer(Modifier.height(12.dp))
+        MacIpField(value = manualHost, onValueChange = onManualHostChange)
+        Spacer(Modifier.height(22.dp))
+        DiscoverySection(
+            servers = discoveredServers,
+            onStartDiscovery = onStartDiscovery,
+            onStopDiscovery = onStopDiscovery,
+            onSelectServer = onSelectServer,
+        )
+        Spacer(Modifier.height(16.dp))
+        WarningNote(
+            text = "Wi-Fi is experimental. Traffic is encrypted (TLS); pair with the PIN " +
+                "shown on the Mac and use only on a trusted network. USB stays the default.",
+        )
+    }
+}
+
+@Composable
+private fun DiscoverySection(
+    servers: List<DiscoveredServer>,
+    onStartDiscovery: () -> Unit,
+    onStopDiscovery: () -> Unit,
+    onSelectServer: (DiscoveredServer) -> Unit,
+) {
+    val context = LocalContext.current
+    val needsPermission = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted -> if (granted) onStartDiscovery() }
+
+    DisposableEffect(Unit) {
+        onDispose { onStopDiscovery() }
+    }
+
+    Column {
+        SectionLabel("Discovered on Wi-Fi")
+        Spacer(Modifier.height(10.dp))
+        GhostTextButton(
+            text = "Find my Mac",
+            onClick = {
+                val granted = !needsPermission || ContextCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.NEARBY_WIFI_DEVICES,
+                ) == PackageManager.PERMISSION_GRANTED
+                if (granted) onStartDiscovery() else permissionLauncher.launch(Manifest.permission.NEARBY_WIFI_DEVICES)
+            },
+            fontSize = 14.sp,
+        )
+        servers.forEach { server ->
+            Spacer(Modifier.height(8.dp))
+            DiscoveredServerRow(server = server, onClick = { onSelectServer(server) })
+        }
+    }
+}
+
+@Composable
+private fun DiscoveredServerRow(server: DiscoveredServer, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(DeskLinkTokens.ShapeChip)
+            .background(color = DeskLinkTokens.Surface04, shape = DeskLinkTokens.ShapeChip)
+            .border(BorderStroke(1.dp, DeskLinkTokens.Border10), DeskLinkTokens.ShapeChip)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = server.name,
+                color = DeskLinkTokens.TextPrimary,
+                fontFamily = PlexSans,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.W600,
+            )
+            MonoText(
+                text = server.osVersion?.let { "${server.host} · $it" } ?: server.host,
+                color = DeskLinkTokens.TextQuaternary,
+                fontSize = 12.sp,
+            )
+        }
+        Text(
+            text = "Use",
+            color = DeskLinkTokens.AccentLight,
+            fontFamily = PlexSans,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.W600,
+        )
+    }
+}
+
+@Composable
+private fun MacIpField(value: String, onValueChange: (String) -> Unit) {
+    BasicTextField(
+        value = value,
+        onValueChange = onValueChange,
+        singleLine = true,
+        textStyle = TextStyle(
+            color = DeskLinkTokens.TextPrimary,
+            fontFamily = PlexSans,
+            fontSize = 15.sp,
+        ),
+        cursorBrush = SolidColor(DeskLinkTokens.AccentLight),
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+        modifier = Modifier.fillMaxWidth(),
+        decorationBox = { innerTextField ->
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(DeskLinkTokens.ShapeChip)
+                    .background(color = DeskLinkTokens.Surface03, shape = DeskLinkTokens.ShapeChip)
+                    .border(BorderStroke(1.dp, DeskLinkTokens.Border10), DeskLinkTokens.ShapeChip)
+                    .padding(horizontal = 14.dp, vertical = 13.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(modifier = Modifier.weight(1f)) {
+                    if (value.isEmpty()) {
+                        Text(
+                            text = "Mac IP address (e.g. 192.168.0.10)",
+                            color = DeskLinkTokens.TextQuaternary,
+                            fontFamily = PlexSans,
+                            fontSize = 15.sp,
+                        )
+                    }
+                    innerTextField()
+                }
+            }
+        },
+    )
+}
+
+@Composable
+private fun WarningNote(text: String) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(DeskLinkTokens.ShapeChip)
+            .background(color = DeskLinkTokens.WarningChipBg, shape = DeskLinkTokens.ShapeChip)
+            .border(BorderStroke(1.dp, DeskLinkTokens.WarningChipBorder), DeskLinkTokens.ShapeChip)
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(9.dp),
+    ) {
+        Icon(
+            imageVector = Icons.Outlined.Warning,
+            contentDescription = null,
+            tint = DeskLinkTokens.Warning,
+            modifier = Modifier
+                .size(16.dp)
+                .padding(top = 1.dp),
+        )
+        Text(
+            text = text,
+            color = DeskLinkTokens.TextBody,
+            fontFamily = PlexSans,
+            fontSize = 12.5.sp,
+        )
+    }
+}
+
 @Composable
 private fun SegmentLabel(text: String, isSelected: Boolean) {
     Row(
@@ -414,6 +728,11 @@ private fun SegmentLabel(text: String, isSelected: Boolean) {
 
 @Composable
 private fun SummaryChip(state: SettingsUiState) {
+    val tail = if (state.transportMode == TransportMode.LAN) {
+        "TLS"
+    } else {
+        "${state.bitrateKbps / 1000}Mbps"
+    }
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -433,7 +752,7 @@ private fun SummaryChip(state: SettingsUiState) {
                 fontSize = 13.5.sp,
             )
             MonoText(
-                text = "${state.width}×${state.height} · ${state.fps}fps · ${state.bitrateKbps / 1000}Mbps",
+                text = "${state.width}×${state.height} · ${state.fps}fps · $tail",
                 color = DeskLinkTokens.TextPrimary,
                 fontSize = 13.5.sp,
             )

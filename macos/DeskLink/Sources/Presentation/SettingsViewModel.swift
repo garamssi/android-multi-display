@@ -2,11 +2,6 @@ import Foundation
 import Observation
 import AppKit
 
-/// Presentation model for the Settings window: surfaces the two macOS permission
-/// states and the diagnostic-logging toggle, and exposes intents to request/open them.
-///
-/// Platform calls go through `PermissionsManaging` (injected) so this is unit-testable
-/// with a fake; the view stays a pure renderer.
 @MainActor
 @Observable
 public final class SettingsViewModel {
@@ -14,54 +9,65 @@ public final class SettingsViewModel {
     public private(set) var accessibilityGranted = false
     public private(set) var screenRecordingGranted = false
 
-    /// Transient status line for the diagnostics actions (nil = idle).
+    public private(set) var localNetworkAddresses: [String] = []
+
     public private(set) var diagnosticsStatus: String?
 
-    /// The recent DeskLink log text shown in the in-app viewer (empty until loaded).
     public private(set) var logText: String = ""
 
-    private let permissions: PermissionsManaging
+    public private(set) var logLines: [DiagnosticLogLine] = []
 
-    private let audioPreference: AudioOutputPreference
+    private let permissions: PermissionsManaging
 
     public init(
         permissions: PermissionsManaging = SystemPermissions(),
         audioPreference: AudioOutputPreference = AudioOutputPreference()
     ) {
-        self.permissions = permissions
         self.audioPreference = audioPreference
+        self.permissions = permissions
+        self.wifiEnabled = TransportSettings.wifiEnabled
         refresh()
     }
 
-    /// The persisted "verbose diagnostic logging" flag. Computed over [Log.isVerbose]
-    /// so there's a single source of truth (no duplicated state to keep in sync).
-    public var verboseLogging: Bool {
-        get { Log.isVerbose }
-        set { Log.isVerbose = newValue }
-    }
+    // Computed over AudioOutputPreference so there is one source of truth, like verboseLogging.
+    private let audioPreference: AudioOutputPreference
 
-    /// The persisted "play Mac audio on the tablet" flag. Computed over
-    /// [AudioOutputPreference] so there is a single source of truth, matching how
-    /// [verboseLogging] is handled.
     public var routeAudioToTablet: Bool {
         get { audioPreference.routeToTablet }
         set { audioPreference.routeToTablet = newValue }
     }
 
-    /// True when this Mac can capture system audio at all. Core Audio process taps are
-    /// the only way to do it without leaving the sound playing on the Mac, and they
-    /// require macOS 14.2 — so on older systems the toggle is shown disabled rather
-    /// than offering something that cannot work.
+    // Core Audio process taps are the only way to capture system audio without leaving it
+    // playing on the Mac, and they require macOS 14.2.
     public var systemAudioCaptureSupported: Bool {
         if #available(macOS 14.2, *) { return true }
         return false
     }
 
-    /// Re-reads both permission states. Called on open and periodically while the
-    /// window is visible, so a change made in System Settings shows up here.
+    public var verboseLogging: Bool {
+        get { Log.isVerbose }
+        set { Log.isVerbose = newValue }
+    }
+
+    public private(set) var pairingPin: String = PairingPin.current
+
+    public private(set) var pairingSecondsRemaining: Int = PairingPin.secondsRemaining()
+
+    public func tickPairing(connected: Bool) {
+        guard !connected else { return }
+        PairingPin.rotateIfExpired()
+        pairingPin = PairingPin.current
+        pairingSecondsRemaining = PairingPin.secondsRemaining()
+    }
+
+    public var wifiEnabled: Bool {
+        didSet { TransportSettings.wifiEnabled = wifiEnabled }
+    }
+
     public func refresh() {
         accessibilityGranted = permissions.isAccessibilityGranted()
         screenRecordingGranted = permissions.isScreenRecordingGranted()
+        localNetworkAddresses = NetworkInterfaces.localIPv4Addresses()
     }
 
     public func requestAccessibility() {
@@ -82,19 +88,17 @@ public final class SettingsViewModel {
         permissions.openScreenRecordingSettings()
     }
 
-    /// Loads the last 5 minutes of DeskLink unified-log lines into [logText] for the
-    /// in-app viewer. Runs off the main actor; result is applied back on the main actor.
     public func refreshLogs() {
         diagnosticsStatus = "Loading…"
         Task {
             let text = await Self.recentLogText()
             logText = text
+            logLines = DiagnosticLogParser.parse(text)
             let lines = text.split(separator: "\n").count
             diagnosticsStatus = "Last 5 min · \(lines) line\(lines == 1 ? "" : "s")"
         }
     }
 
-    /// Copies whatever is currently shown in the viewer to the clipboard.
     public func copyLogs() {
         guard !logText.isEmpty else {
             diagnosticsStatus = "Nothing to copy yet — tap Refresh"
@@ -109,9 +113,13 @@ public final class SettingsViewModel {
         NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/Utilities/Console.app"))
     }
 
+    public func copyAddress(_ address: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(address, forType: .string)
+    }
+
     // MARK: - Private
 
-    /// Runs `log show` for our subsystem off the main actor and returns the text.
     nonisolated private static func recentLogText() async -> String {
         await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {

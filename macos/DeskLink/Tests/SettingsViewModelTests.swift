@@ -72,4 +72,24 @@ final class SettingsViewModelTests: XCTestCase {
         vm.verboseLogging = false
         XCTAssertFalse(Log.isVerbose)
     }
+
+    func testWifiEnabledTogglePersistsToTransportSettings() {
+        let original = TransportSettings.wifiEnabled
+        defer { TransportSettings.wifiEnabled = original }
+
+        let vm = SettingsViewModel(permissions: FakePermissions())
+        vm.wifiEnabled = true
+        XCTAssertTrue(TransportSettings.wifiEnabled)
+        vm.wifiEnabled = false
+        XCTAssertFalse(TransportSettings.wifiEnabled)
+    }
+
+    func testInitReflectsPersistedWifiFlag() {
+        let original = TransportSettings.wifiEnabled
+        defer { TransportSettings.wifiEnabled = original }
+
+        TransportSettings.wifiEnabled = true
+        let vm = SettingsViewModel(permissions: FakePermissions())
+        XCTAssertTrue(vm.wifiEnabled, "init should mirror the persisted opt-in")
+    }
 }

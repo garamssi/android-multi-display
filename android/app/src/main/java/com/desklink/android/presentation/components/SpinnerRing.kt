@@ -22,11 +22,6 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.desklink.android.presentation.theme.DeskLinkTokens
 
-/**
- * A spinning progress ring (the handoff `dl-spin`, 0.9s linear, 360°). Draws a faint
- * full track with a bright accent top-arc that rotates continuously, wrapping the
- * given [content] (the 56dp app glyph on the connecting screen).
- */
 @Composable
 fun SpinnerRing(
     modifier: Modifier = Modifier,
@@ -51,7 +46,6 @@ fun SpinnerRing(
             val inset = strokeWidth.toPx() / 2f
             val arcSize = Size(this.size.width - strokeWidth.toPx(), this.size.height - strokeWidth.toPx())
             val topLeft = Offset(inset, inset)
-            // Faint full track.
             drawArc(
                 color = DeskLinkTokens.AccentLight.copy(alpha = 0.18f),
                 startAngle = 0f,
@@ -61,7 +55,6 @@ fun SpinnerRing(
                 size = arcSize,
                 style = stroke,
             )
-            // Bright rotating top arc (~90° head).
             rotate(degrees = angle) {
                 drawArc(
                     color = DeskLinkTokens.AccentLight,

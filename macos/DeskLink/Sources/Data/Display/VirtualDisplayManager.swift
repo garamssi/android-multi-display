@@ -1,4 +1,5 @@
 import Foundation
+import CoreGraphics
 import CGVirtualDisplayBridge
 
 public final class VirtualDisplayManager: VirtualDisplayManaging, @unchecked Sendable {
@@ -47,9 +48,14 @@ public final class VirtualDisplayManager: VirtualDisplayManaging, @unchecked Sen
         }
     }
 
-    /// The CGDirectDisplayID of the virtual display, or 0 if inactive.
     public var displayID: UInt32 {
         lock.withLock { bridge.displayID }
+    }
+
+    public var activeResolution: (width: Int, height: Int)? {
+        let id = lock.withLock { bridge.displayID }
+        guard id != 0, let mode = CGDisplayCopyDisplayMode(id) else { return nil }
+        return (mode.pixelWidth, mode.pixelHeight)
     }
 
     private func mapError(_ nsError: NSError) -> ConnectionError {
