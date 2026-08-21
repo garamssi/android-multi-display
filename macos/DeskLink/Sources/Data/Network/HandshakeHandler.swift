@@ -110,6 +110,8 @@ public final class HandshakeHandler: Sendable {
         case .refused: return "Connection refused"
         case .protocolMismatch: return "Protocol version mismatch"
         case .timeout: return "Operation timed out"
+        case .pairingRejected: return "Pairing rejected"
+        case .pairingLockedOut: return "Too many pairing attempts"
         case .lost: return "Connection lost"
         case .encoderInitFailed: return "Encoder failed to initialize"
         case .encoderFailed: return "Encoding failed"

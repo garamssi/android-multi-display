@@ -5,6 +5,11 @@ public enum ConnectionError: Int, Error, Sendable {
     case protocolMismatch = 1001
     case timeout = 1002
     case lost = 1003
+    // The client has had this code all along; the Mac could not send it, so a wrong PIN was
+    // signalled by silence -- which the client reads as an unreachable Mac.
+    case pairingRejected = 1004
+    // Distinct from a rejection: the code may be right and waiting is what helps.
+    case pairingLockedOut = 1005
 
     case encoderInitFailed = 1100
     case encoderFailed = 1101

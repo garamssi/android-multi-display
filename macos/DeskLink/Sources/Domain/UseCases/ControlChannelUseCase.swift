@@ -47,8 +47,22 @@ public final class ControlChannelUseCase: Sendable {
     // On PONG-timeout runPingLoop returns and we loop to await the next client, so reconnects are handled WITHOUT restarting the server; the receive loop keeps running on the same byte stream.
     private func runKeepAlive() async throws {
         for await _ in server.clientConnections {
-            if let challenge = await authGate.beginChallenge() {
-                try? await server.send(data: challenge, type: .authChallenge)
+            switch await authGate.beginChallenge() {
+            case .notRequired:
+                break
+            case .challenge(let nonce):
+                try? await server.send(data: nonce, type: .authChallenge)
+            case .lockedOut(let retryAfterSeconds):
+                // Say it. Sending nothing is what made a lockout look like a wrong PIN, with
+                // the right code failing too and no hint that waiting is what helps.
+                Log.info(.server, "pairing locked out; retry in \(retryAfterSeconds)s")
+                try? await server.send(
+                    data: handshakeHandler.makeErrorMessage(
+                        .pairingLockedOut,
+                        message: "Too many attempts. Try again in \(retryAfterSeconds) seconds."
+                    ),
+                    type: .error
+                )
             }
             monitor.recordPong()
             try? await runPingLoop() // returns on PONG-timeout; then await next client
@@ -111,6 +125,16 @@ public final class ControlChannelUseCase: Sendable {
         case .authResponse:
             if let confirm = await authGate.verifyResponse(frame.payload) {
                 try await server.send(data: confirm, type: .authConfirm)
+            } else {
+                // Say so, rather than going quiet. Silence is indistinguishable from an
+                // unreachable Mac, so the client waited out its handshake timeout and then
+                // offered to retry the connection instead of asking for the code again.
+                // The lockout after `AuthGate.maxFailures` is what limits guessing here, not
+                // the delay this used to add.
+                try await server.send(
+                    data: handshakeHandler.makeErrorMessage(.pairingRejected),
+                    type: .error
+                )
             }
             return clientInfo
 

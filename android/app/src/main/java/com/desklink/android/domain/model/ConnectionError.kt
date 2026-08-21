@@ -7,6 +7,10 @@ enum class ConnectionError(val code: Int, val description: String) {
     LOST(1003, "Connection lost"),
     PAIRING_REJECTED(1004, "Pairing rejected (wrong PIN)"),
 
+    // Distinct from a rejection: the code may be right and waiting is what helps. Telling the
+    // user to check the PIN here sends them to re-read a code that was never the problem.
+    PAIRING_LOCKED_OUT(1005, "Too many attempts. Wait a moment, then pair again."),
+
     ENCODER_INIT_FAILED(1100, "Encoder initialization failed"),
     ENCODER_FAILED(1101, "Encoding error"),
     DECODER_INIT_FAILED(1102, "Decoder initialization failed"),

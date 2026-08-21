@@ -70,6 +70,17 @@ class HandshakeClient @Inject constructor() {
         return json.toString().toByteArray(Charsets.UTF_8)
     }
 
+    /// The code carried by an ERROR frame, or null if it does not name one.
+    ///
+    /// The distinction matters: a rejected proof asks for a new code, a lockout asks the user
+    /// to wait, and treating them alike sends them to re-read a PIN that was never the problem.
+    fun parseErrorCode(payload: ByteArray): ConnectionError? {
+        val code = runCatching {
+            JSONObject(String(payload, Charsets.UTF_8)).optInt("code", -1)
+        }.getOrDefault(-1)
+        return ConnectionError.fromCode(code)
+    }
+
     fun parseConfigResponse(payload: ByteArray): DisplayConfig? {
         val json = try {
             JSONObject(String(payload, Charsets.UTF_8))

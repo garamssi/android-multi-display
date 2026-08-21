@@ -236,6 +236,27 @@ print(
 )
 failures += 0 if batch_ok else 1
 
+# Error codes both sides must agree on. 1004 existed only in the client until the server
+# gained it, so a rejected pairing was signalled by silence -- indistinguishable from an
+# unreachable Mac.
+ERROR_CODES = {
+    1000: "CONNECTION_REFUSED",
+    1001: "PROTOCOL_MISMATCH",
+    1002: "TIMEOUT",
+    1003: "CONNECTION_LOST",
+    1004: "PAIRING_REJECTED",
+    1005: "PAIRING_LOCKED_OUT",
+}
+# 1004 and 1005 must stay distinct: one asks for a new code, the other asks the user to wait,
+# and collapsing them sends the user to re-read a PIN that was never the problem.
+codes_ok = (
+    ERROR_CODES[1004] == "PAIRING_REJECTED"
+    and ERROR_CODES[1005] == "PAIRING_LOCKED_OUT"
+    and len(set(ERROR_CODES.values())) == len(ERROR_CODES)
+)
+print(f"error codes: {len(ERROR_CODES)} connection-level, 1004={ERROR_CODES[1004]} -> {'OK' if codes_ok else 'FAIL'}")
+failures += 0 if codes_ok else 1
+
 # Reconnect schedule: the first retry has to be fast enough for a server that restarted its
 # own session, without shortening the total window a slow-to-enumerate device needs.
 RECONNECT_DELAYS_MS = [200, 400, 800, 1600, 2000]

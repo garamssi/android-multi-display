@@ -54,6 +54,30 @@ final class ControlChannelUseCaseTests: XCTestCase {
         XCTAssertTrue(sent.isEmpty)
     }
 
+    // A rejected proof used to be answered with nothing at all. The client cannot tell that
+    // from an unreachable Mac, so its UI offered to retry the connection instead of asking for
+    // the code again -- the one thing that would have helped.
+    func testRejectedProofIsAnsweredWithAPairingError() async throws {
+        let server = RecordingServer()
+        let key = PairingCrypto.derivePSK(pin: "123456")
+        let useCase = ControlChannelUseCase(
+            server: server,
+            receiver: EmptyReceiver(),
+            authKeyProvider: { key }
+        )
+
+        let wrongProof = Data(repeating: 0, count: ProtocolConstants.authNonceLength + 32)
+        _ = try await useCase.process(
+            FrameAccumulator.Frame(type: .authResponse, payload: wrongProof),
+            clientInfo: nil
+        )
+
+        let sent = await server.sent
+        XCTAssertEqual(sent.map(\.type), [.error])
+        let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: sent[0].data) as? [String: Any])
+        XCTAssertEqual(json["code"] as? Int, ConnectionError.pairingRejected.rawValue)
+    }
+
     func testPingIsAnsweredWithPong() async throws {
         let server = RecordingServer()
         let useCase = ControlChannelUseCase(server: server, receiver: EmptyReceiver())

@@ -119,10 +119,24 @@ class ConnectionManagerImpl @Inject constructor(
             val connected = try {
                 if (session.authKey != null) {
                     Log.i(TAG, "authenticating LAN connection with pairing PIN")
-                    val authenticated = withTimeout(ProtocolConstants.HANDSHAKE_TIMEOUT) {
-                        session.authenticated.await()
+                    val authenticated = try {
+                        withTimeout(ProtocolConstants.HANDSHAKE_TIMEOUT) {
+                            session.authenticated.await()
+                        }
+                    } catch (_: TimeoutCancellationException) {
+                        // A Mac that rejects the proof answers with nothing at all, while its
+                        // PINGs keep arriving -- so a wrong PIN is indistinguishable from
+                        // silence here, and silence is what it means. Reported as a timeout
+                        // instead, the UI offers to retry the connection rather than asking
+                        // for the new code, which is the one thing that would help.
+                        throw PairingAuthException("timed out awaiting AUTH_CONFIRM")
                     }
-                    if (!authenticated) throw PairingAuthException("LAN pairing authentication failed")
+                    if (!authenticated) {
+                        // Keeps a reason the server already gave (a lockout, say); falls back
+                        // to a rejection when it gave none.
+                        val reason = lastFailureError ?: ConnectionError.PAIRING_REJECTED
+                        throw PairingAuthException("LAN pairing failed: $reason")
+                    }
                 }
 
                 Log.i(TAG, "control channel connected; sending HANDSHAKE_REQUEST")
@@ -171,7 +185,7 @@ class ConnectionManagerImpl @Inject constructor(
             false
         } catch (e: PairingAuthException) {
             Log.e(TAG, "pairing authentication failed", e)
-            lastFailureError = ConnectionError.PAIRING_REJECTED
+            lastFailureError = lastFailureError ?: ConnectionError.PAIRING_REJECTED
             controlClient.disconnect()
             false
         } catch (e: Exception) {
@@ -270,6 +284,15 @@ class ConnectionManagerImpl @Inject constructor(
                     )
                 if (ok) session.phase = ControlPhase.HANDSHAKE
                 session.authenticated.complete(ok)
+            }
+
+            MessageType.ERROR -> {
+                // The Mac says why. Acting on it now is the difference between a named cause
+                // and five seconds of a hung-looking connection followed by an offer to retry
+                // the network -- and 1005 means the code was never the problem.
+                lastFailureError = handshakeClient.parseErrorCode(payload)
+                    ?: ConnectionError.PAIRING_REJECTED
+                session.authenticated.complete(false)
             }
 
             else -> { /* nothing else is meaningful before the client is authenticated */ }
