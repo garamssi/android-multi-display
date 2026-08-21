@@ -15,7 +15,7 @@ interface VideoStreamRepository {
     // video layer knowing audio exists. Null clears it.
     fun setFrameRenderedListener(listener: ((serverTimestampUs: Long, localNanos: Long) -> Unit)?)
 
-    fun renderFrame(): Boolean
+    fun renderFrame(frameTimeNanos: Long): Boolean
 
     sealed interface VideoStreamEvent {
         data class ConfigReceived(val config: DisplayConfig) : VideoStreamEvent

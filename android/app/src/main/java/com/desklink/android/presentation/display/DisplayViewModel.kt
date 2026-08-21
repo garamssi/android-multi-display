@@ -69,6 +69,10 @@ class DisplayViewModel @Inject constructor(
         viewModelScope.launch {
             runCatching { videoStream.disconnect() }
             runCatching { inputRepository.disconnect() }
+            // Audio must close its socket too: cancelling the job alone leaves the server
+            // streaming into a connection nobody reads, holding its tap, and both machines
+            // go silent. The video and input paths already do this.
+            runCatching { audioStream.disconnect() }
             startStreaming()
         }
     }
@@ -97,7 +101,7 @@ class DisplayViewModel @Inject constructor(
         started = false
     }
 
-    fun renderFrame(): Boolean = videoStream.renderFrame()
+    fun renderFrame(frameTimeNanos: Long): Boolean = videoStream.renderFrame(frameTimeNanos)
 
     fun displayRotation(): DisplayRotation = settingsRepository.currentDisplayRotation()
 

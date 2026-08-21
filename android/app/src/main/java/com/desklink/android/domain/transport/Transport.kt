@@ -9,5 +9,7 @@ interface Transport {
 
     fun inputPort(): Int
 
-    fun audioPort(): Int
+    // Null when this transport does not carry audio, so the caller can skip the channel
+    // instead of connecting to a port nothing serves.
+    fun audioPort(): Int?
 }

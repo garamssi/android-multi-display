@@ -14,6 +14,8 @@ import java.nio.ByteBuffer
 
 class HEVCDecoderTest {
 
+    private val VSYNC_NANOS = 1_000_000_000L
+
     private fun mockCodecWithInputBuffers(): MediaCodec {
         val codec = mockk<MediaCodec>(relaxed = true)
         every { codec.getInputBuffer(any()) } answers { ByteBuffer.allocate(2 * 1024 * 1024) }
@@ -38,7 +40,7 @@ class HEVCDecoderTest {
         decoder.submitFrame(byteArrayOf(3), 300, true)
         assertEquals(3, decoder.pendingFrameCount(), "frames must be buffered, not dropped")
 
-        decoder.renderFrame()
+        decoder.renderFrame(VSYNC_NANOS)
         assertEquals(0, decoder.pendingFrameCount(), "all buffered frames must be flushed")
 
         verify(exactly = 3) { codec.queueInputBuffer(any(), any(), any(), any(), any()) }
@@ -75,7 +77,7 @@ class HEVCDecoderTest {
         val decoder = HEVCDecoder()
         decoder.attachCodecForTest(codec)
 
-        val rendered = decoder.renderFrame()
+        val rendered = decoder.renderFrame(VSYNC_NANOS)
 
         assertTrue(rendered, "should report at least one rendered frame")
         verify(exactly = 1) { codec.releaseOutputBuffer(0, true) }
@@ -103,7 +105,7 @@ class HEVCDecoderTest {
         val decoder = HEVCDecoder()
         decoder.attachCodecForTest(codec)
 
-        val rendered = decoder.renderFrame()
+        val rendered = decoder.renderFrame(VSYNC_NANOS)
 
         assertTrue(rendered)
         verify(exactly = 1) { codec.releaseOutputBuffer(5, true) }

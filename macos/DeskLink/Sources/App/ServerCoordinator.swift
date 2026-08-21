@@ -71,7 +71,8 @@ public final class ServerCoordinator {
                 controlPort: ProtocolConstants.portControlLan,
                 videoPort: ProtocolConstants.portVideoLan,
                 inputPort: ProtocolConstants.portInputLan,
-                audioPort: ProtocolConstants.portAudioLan,
+                // Audio is USB-only; see startAudioStreamingIfEnabled.
+                audioPort: nil,
                 requiresPairing: true
             )
             : nil
@@ -122,6 +123,7 @@ public final class ServerCoordinator {
         // tap, so a second stack would either contend for it or push raw PCM over Wi-Fi.
         // The LAN audio port stays reserved for when a codec exists (see the roadmap).
         startAudioStreamingIfEnabled(for: usb)
+        observeAudioPreference(for: usb)
     }
 
     // The tap only starts once a client connects (see StreamAudioUseCase), so running this
@@ -141,6 +143,32 @@ public final class ServerCoordinator {
         audioCapturer = capturer
         let useCase = StreamAudioUseCase(capturer: capturer, streamServer: stack.audioServer)
         tasks.append(Task { try? await useCase.execute() })
+    }
+
+    // Follows the preference while the server runs. Reading it only at start meant that
+    // turning routing off mid-session did nothing until Stop/Start — on the side that owns
+    // the mute, so the user could not get their Mac's sound back without restarting.
+    private func observeAudioPreference(for stack: ChannelStack) {
+        tasks.append(Task { [weak self] in
+            for await enabled in AudioOutputPreference.routeToTabletChanges {
+                guard let self else { return }
+                await self.applyAudioPreference(enabled, for: stack)
+            }
+        })
+    }
+
+    private func applyAudioPreference(_ enabled: Bool, for stack: ChannelStack) async {
+        guard isRunning else { return }
+        if enabled {
+            guard audioCapturer == nil else { return }
+            startAudioStreamingIfEnabled(for: stack)
+        } else {
+            guard let capturer = audioCapturer else { return }
+            audioCapturer = nil
+            // Releasing the tap is what hands the speakers back.
+            await capturer.stopCapture()
+            Log.info(.stream, "audio: routing turned off; audio returns to the Mac")
+        }
     }
 
     private func startControlChannel(for stack: ChannelStack) {

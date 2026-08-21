@@ -3,10 +3,10 @@ package com.desklink.android.data.codec
 import android.view.Choreographer
 
 class VsyncRenderer(
-    private val renderTick: () -> Boolean,
+    private val renderTick: (frameTimeNanos: Long) -> Boolean,
 ) : Choreographer.FrameCallback {
 
-    constructor(decoder: HEVCDecoder) : this({ decoder.renderFrame() })
+    constructor(decoder: HEVCDecoder) : this({ frameTimeNanos -> decoder.renderFrame(frameTimeNanos) })
 
     @Volatile
     private var isRunning = false
@@ -25,7 +25,7 @@ class VsyncRenderer(
     override fun doFrame(frameTimeNanos: Long) {
         if (!isRunning) return
 
-        renderTick()
+        renderTick(frameTimeNanos)
 
         Choreographer.getInstance().postFrameCallback(this)
     }

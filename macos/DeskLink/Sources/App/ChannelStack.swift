@@ -20,7 +20,9 @@ final class ChannelStack {
     let controlPort: UInt16
     let videoPort: UInt16
     let inputPort: UInt16
-    let audioPort: UInt16
+    // Nil on a stack that does not serve audio; binding a port nobody serves leaves the
+    // client connected to silence with no error to report.
+    let audioPort: UInt16?
 
     let requiresPairing: Bool
 
@@ -35,7 +37,7 @@ final class ChannelStack {
         controlPort: UInt16,
         videoPort: UInt16,
         inputPort: UInt16,
-        audioPort: UInt16,
+        audioPort: UInt16?,
         requiresPairing: Bool
     ) {
         self.kind = kind
@@ -51,7 +53,9 @@ final class ChannelStack {
         try await controlServer.start(port: controlPort, scope: scope)
         try await videoServer.start(port: videoPort, scope: scope)
         try await inputServer.start(port: inputPort, scope: scope)
-        try await audioServer.start(port: audioPort, scope: scope)
+        if let audioPort {
+            try await audioServer.start(port: audioPort, scope: scope)
+        }
     }
 
     func stop() async {

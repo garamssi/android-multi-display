@@ -20,6 +20,25 @@ import Foundation
 /// leaving the user with a silent Mac for the life of the process and defeating the
 /// self-healing above. Serializing every transition through actor isolation makes that
 /// interleaving impossible rather than unlikely.
+// Counts stream-level chunk drops. Separate from the actor because the consumer task
+// runs outside actor isolation and must record a drop without awaiting.
+private final class DroppedChunkCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    func increment() {
+        lock.withLock { count += 1 }
+    }
+
+    func reset() -> Int {
+        lock.withLock {
+            let value = count
+            count = 0
+            return value
+        }
+    }
+}
+
 @available(macOS 14.2, *)
 public actor CoreAudioTapCapturer: AudioCapturing {
 
@@ -59,6 +78,18 @@ public actor CoreAudioTapCapturer: AudioCapturing {
 
     private var session: Session?
 
+    // Actors are REENTRANT at every `await`, so isolation alone does not serialize
+    // start/stop: `startCapture` suspends inside `await stopCapture()`, which has already
+    // cleared `session`, and a second caller entering that window creates a whole second
+    // tap that the first then overwrites. An orphaned tap with a live IO proc holds the
+    // mute claim for the life of the process, which is the worst failure this feature has.
+    private var isTransitioning = false
+    private var transitionWaiters: [CheckedContinuation<Void, Never>] = []
+
+    // Chunks the AsyncStream discarded because the network consumer fell behind. Counted
+    // because each one is a gap the client has to resynchronize around.
+    private let droppedChunks = DroppedChunkCounter()
+
     /// Real-time-safe handoff from the IO proc to the consumer task. Reset between
     /// sessions so a new connection never receives the previous session's timestamps.
     private let ringBuffer = AudioChunkRingBuffer(
@@ -75,7 +106,10 @@ public actor CoreAudioTapCapturer: AudioCapturing {
     // MARK: - AudioCapturing
 
     public func startCapture() async throws -> AudioCaptureSession {
-        await stopCapture()
+        await beginTransition()
+        defer { endTransition() }
+
+        await teardownCurrentSession()
         // Stale slots would replay the previous session's timestamps into this one.
         ringBuffer.reset()
 
@@ -116,7 +150,8 @@ public actor CoreAudioTapCapturer: AudioCapturing {
                     ringBuffer: ringBuffer,
                     format: format,
                     continuation: continuation,
-                    idlePollIntervalNanos: Self.idlePollIntervalNanos
+                    idlePollIntervalNanos: Self.idlePollIntervalNanos,
+                    droppedChunks: droppedChunks
                 ),
                 deviceWatcherTask: Self.startDeviceWatcher(
                     initialDeviceID: outputDeviceID,
@@ -134,6 +169,29 @@ public actor CoreAudioTapCapturer: AudioCapturing {
     }
 
     public func stopCapture() async {
+        await beginTransition()
+        defer { endTransition() }
+
+        await teardownCurrentSession()
+    }
+
+    // Serializes start/stop against each other. A caller that arrives mid-transition waits
+    // for it to finish instead of observing the half-torn-down state.
+    private func beginTransition() async {
+        while isTransitioning {
+            await withCheckedContinuation { transitionWaiters.append($0) }
+        }
+        isTransitioning = true
+    }
+
+    private func endTransition() {
+        isTransitioning = false
+        let waiters = transitionWaiters
+        transitionWaiters.removeAll()
+        for waiter in waiters { waiter.resume() }
+    }
+
+    private func teardownCurrentSession() async {
         guard let session else { return }
         self.session = nil
 
@@ -151,9 +209,14 @@ public actor CoreAudioTapCapturer: AudioCapturing {
             procID: session.ioProcID
         )
 
-        let dropped = ringBuffer.droppedChunkCount
-        if dropped > 0 {
-            Log.error(.capture, "audio tap: \(dropped) chunk(s) dropped this session — consumer fell behind")
+        let ringDropped = ringBuffer.droppedChunkCount
+        let streamDropped = droppedChunks.reset()
+        if ringDropped > 0 || streamDropped > 0 {
+            Log.error(
+                .capture,
+                "audio tap: dropped \(ringDropped) chunk(s) at the ring buffer and "
+                    + "\(streamDropped) at the stream this session"
+            )
         }
     }
 
@@ -165,16 +228,21 @@ public actor CoreAudioTapCapturer: AudioCapturing {
         ringBuffer: AudioChunkRingBuffer,
         format: AudioFormat,
         continuation: AsyncStream<AudioChunk>.Continuation,
-        idlePollIntervalNanos: UInt64
+        idlePollIntervalNanos: UInt64,
+        droppedChunks: DroppedChunkCounter
     ) -> Task<Void, Never> {
         Task.detached(priority: .userInitiated) {
             while !Task.isCancelled {
                 var yieldedAny = false
                 while let slot = ringBuffer.read() {
                     yieldedAny = true
-                    continuation.yield(
-                        AudioChunk(pcm: slot.pcm, timestampUs: slot.timestampUs, format: format)
-                    )
+                    let chunk = AudioChunk(pcm: slot.pcm, timestampUs: slot.timestampUs, format: format)
+                    // A dropped chunk is a hole in the audio the client must then correct
+                    // for, so it cannot go unrecorded: `bufferingNewest` discards silently,
+                    // and without this the loss is invisible in every log.
+                    if case .dropped = continuation.yield(chunk) {
+                        droppedChunks.increment()
+                    }
                 }
                 if !yieldedAny {
                     try? await Task.sleep(nanoseconds: idlePollIntervalNanos)
@@ -226,11 +294,19 @@ public actor CoreAudioTapCapturer: AudioCapturing {
             guard inputTime.pointee.mFlags.contains(.hostTimeValid) else { return }
             let timestampUs = MediaClock.microsFromHostTime(inputTime.pointee.mHostTime)
 
-            let buffers = UnsafeMutableAudioBufferListPointer(
-                UnsafeMutablePointer(mutating: inputData)
-            )
+            // Read mBuffers directly instead of going through
+            // UnsafeMutableAudioBufferListPointer's Collection conformance. That
+            // conformance does not specialize here: the emitted code fetches type
+            // metadata, makes a dynamically-sized stack allocation for the archetype
+            // Index, and dispatches startIndex/endIndex/subscript through witness thunks
+            // whose lazy accessors can take the runtime metadata lock — all on the
+            // real-time audio thread, which this file's contract forbids.
+            //
             // `verifyTapIsTheOnlyInput` established that buffer 0 is the tap.
-            guard let buffer = buffers.first, let source = buffer.mData else { return }
+            let bufferList = inputData.pointee
+            guard bufferList.mNumberBuffers > 0 else { return }
+            let buffer = bufferList.mBuffers
+            guard let source = buffer.mData else { return }
             let sampleCount = Int(buffer.mDataByteSize) / MemoryLayout<Float>.size
             guard sampleCount > 0 else { return }
 
@@ -334,6 +410,15 @@ public actor CoreAudioTapCapturer: AudioCapturing {
             "AudioObjectGetPropertyDataSize(InputStreamConfiguration)"
         )
 
+        // A reply smaller than one AudioBufferList cannot be parsed; reading mNumberBuffers
+        // out of it would be out of bounds, in the very function that exists to make this
+        // path safe.
+        guard size >= UInt32(MemoryLayout<AudioBufferList>.size) else {
+            throw AudioCaptureError.ambiguousInputStreams(
+                channelCountsPerBuffer: [],
+                expectedChannels: Int(tapFormat.mChannelsPerFrame)
+            )
+        }
         let bufferListMemory = UnsafeMutableRawPointer.allocate(
             byteCount: Int(size),
             alignment: MemoryLayout<AudioBufferList>.alignment

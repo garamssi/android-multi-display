@@ -18,5 +18,6 @@ class LanTransport @Inject constructor(
 
     override fun inputPort(): Int = ProtocolConstants.PORT_INPUT_LAN
 
-    override fun audioPort(): Int = ProtocolConstants.PORT_AUDIO_LAN
+    // Uncompressed PCM is unsuitable for Wi-Fi and the Mac serves audio on USB only.
+    override fun audioPort(): Int? = null
 }

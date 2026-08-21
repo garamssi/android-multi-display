@@ -45,9 +45,9 @@ class VideoStreamRepositoryImpl @Inject constructor(
         decoder.onFrameRendered = listener
     }
 
-    override fun renderFrame(): Boolean {
+    override fun renderFrame(frameTimeNanos: Long): Boolean {
         if (surface == null) return false
-        return decoder.renderFrame()
+        return decoder.renderFrame(frameTimeNanos)
     }
 
     override fun connect(config: DisplayConfig): Flow<VideoStreamRepository.VideoStreamEvent> =

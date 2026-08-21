@@ -20,7 +20,7 @@ class RoutingTransport @Inject constructor(
 
     override fun inputPort(): Int = strategy().inputPort()
 
-    override fun audioPort(): Int = strategy().audioPort()
+    override fun audioPort(): Int? = strategy().audioPort()
 
     private fun strategy(): Transport = when (settings.currentTransportMode()) {
         TransportMode.USB -> usb

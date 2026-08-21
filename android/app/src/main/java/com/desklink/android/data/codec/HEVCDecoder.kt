@@ -100,7 +100,7 @@ class HEVCDecoder @Inject constructor() {
         }
     }
 
-    fun renderFrame(): Boolean {
+    fun renderFrame(frameTimeNanos: Long): Boolean {
         val codec = codec ?: return false
 
         pumpInput()
@@ -108,6 +108,7 @@ class HEVCDecoder @Inject constructor() {
         var rendered = false
         // Server timestamp of the newest frame released in this pass, or null if none.
         var lastRenderedTimestampUs: Long? = null
+        var releasedThisPass = 0
         while (true) {
             val outputIndex = try {
                 codec.dequeueOutputBuffer(bufferInfo, 0L) // non-blocking
@@ -120,6 +121,7 @@ class HEVCDecoder @Inject constructor() {
                     lastRenderedTimestampUs = bufferInfo.presentationTimeUs
                     codec.releaseOutputBuffer(outputIndex, true) // render to surface
                     rendered = true
+                    releasedThisPass++
                 }
 
                 outputIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
@@ -138,7 +140,17 @@ class HEVCDecoder @Inject constructor() {
         // viewer sees, and they would all be stamped with the same local time — so
         // reporting each of them would feed the sync reference a burst of observations
         // describing a render that never happened that way.
-        lastRenderedTimestampUs?.let { onFrameRendered?.invoke(it, System.nanoTime()) }
+        // Reported against the VSYNC time, not System.nanoTime(). The frame released here
+        // is scanned out at the next vsync, and frameTimeNanos is that cadence's own
+        // clock: sampling wall time inside the drain loop instead folds this callback's
+        // scheduling jitter straight into the lip-sync reference.
+        // SurfaceFlinger consumes one queued buffer per vsync, so when a drain pass
+        // releases several the newest is scanned out that many vsyncs later — reporting
+        // +1 would understate video latency exactly when the decoder is behind, and the
+        // sync path reads that as "audio is late" and speeds up for no reason.
+        lastRenderedTimestampUs?.let {
+            onFrameRendered?.invoke(it, frameTimeNanos + releasedThisPass * VSYNC_PERIOD_NANOS)
+        }
         return rendered
     }
 
@@ -163,6 +175,13 @@ class HEVCDecoder @Inject constructor() {
     }
 
     private companion object {
+        // A frame released to the Surface is scanned out at the NEXT vsync, so the
+        // instant audio must line up with is one period after the callback's own time.
+        // 60 Hz is assumed: on a faster panel the residual is a few milliseconds, far
+        // inside the sync tolerances, and reading the real refresh rate would drag a
+        // Display dependency into the decoder.
+        private const val VSYNC_PERIOD_NANOS = 16_666_667L
+
         const val MAX_PENDING_FRAMES = 30
 
         // Deprecated but still delivered on API 28 (minSdk).

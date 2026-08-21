@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.flowOn
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
 import javax.inject.Inject
 
 /**
@@ -73,20 +74,37 @@ class AudioStreamRepositoryImpl @Inject constructor(
     @Volatile
     private var player: AudioTrackPlayer? = null
 
+    private val connectionGeneration = AtomicInteger(0)
+
     override fun noteVideoRendered(serverTimestampUs: Long, localNanos: Long) {
         player?.noteVideoRendered(serverTimestampUs, localNanos)
     }
 
     override suspend fun disconnect() {
+        // Explicit teardown: retire the current generation so a late cleanup from the
+        // collection being cancelled cannot close a connection opened after this point.
+        connectionGeneration.incrementAndGet()
         audioClient.disconnect()
     }
 
     override fun connect(): Flow<AudioStreamRepository.AudioStreamEvent> = callbackFlow {
         var framesBeforeConfig = 0
         var ownPlayer: AudioTrackPlayer? = null
+        // Identifies this collection's socket. `audioClient` is shared with the reconnect
+        // that replaces us, so teardown must not close whatever connection happens to be
+        // current — only the one this collection opened.
+        val generation = connectionGeneration.incrementAndGet()
         try {
-            val host = transport.host()
             val port = transport.audioPort()
+            if (port == null) {
+                // This transport does not carry audio (Wi-Fi today). Say so and finish,
+                // rather than opening a connection nothing will ever serve.
+                Log.i(TAG, "audio channel not available on this transport")
+                trySend(AudioStreamRepository.AudioStreamEvent.StreamStopped)
+                awaitClose { }
+                return@callbackFlow
+            }
+            val host = transport.host()
             Log.i(TAG, "connecting audio channel to $host:$port")
             audioClient.connect(host, port)
 
@@ -141,26 +159,33 @@ class AudioStreamRepositoryImpl @Inject constructor(
             }
             Log.i(TAG, "audio stream stopped (socket closed)")
             trySend(AudioStreamRepository.AudioStreamEvent.StreamStopped)
-        } catch (e: CancellationException) {
-            throw e
+            awaitClose { }
         } catch (e: Exception) {
-            Log.e(TAG, "audio stream error: $e")
-            trySend(AudioStreamRepository.AudioStreamEvent.Error(e.message ?: "Audio stream failed"))
-        }
-
-        awaitClose {
-            ownPlayer?.stop()
-            // Only clear the shared reference if this collection still owns it, so a
-            // reconnect that already installed its own player is left alone.
-            if (player === ownPlayer) player = null
-            // Closing the socket is what releases the Mac's tap. Without it the server
-            // keeps sending into a connection nobody reads and both machines go silent.
-            // awaitClose runs on a cancelled coroutine, so the close is dispatched
-            // separately rather than awaited here.
-            closeSocket()
-            Log.i(TAG, "audio channel closed")
+            if (e !is CancellationException) {
+                Log.e(TAG, "audio stream error: $e")
+                trySend(AudioStreamRepository.AudioStreamEvent.Error(e.message ?: "Audio stream failed"))
+                awaitClose { }
+            }
+            throw e
+        } finally {
+            // Teardown lives in `finally`, not in `awaitClose`. Cancellation is the normal
+            // way this collection ends (backgrounding, reconnect, preference toggle) and it
+            // unwinds past `awaitClose` entirely — so cleanup placed there never ran, the
+            // AudioTrack was never released, and the session summary never printed.
+            releaseSession(ownPlayer, generation)
         }
     }.flowOn(audioDispatcher)
+
+    private fun releaseSession(ownPlayer: AudioTrackPlayer?, generation: Int) {
+        ownPlayer?.stop()
+        // Clear the shared reference only if this collection still owns it, so a cancelled
+        // job cannot strand the reconnect that already installed its own player.
+        if (player === ownPlayer) player = null
+        // Closing the socket is what releases the Mac's tap: without it the server keeps
+        // sending into a connection nobody reads and both machines go silent.
+        closeSocket(generation)
+        Log.i(TAG, "audio channel closed")
+    }
 
     /**
      * Closes the socket outside the cancelled collection.
@@ -168,8 +193,11 @@ class AudioStreamRepositoryImpl @Inject constructor(
      * [awaitClose] cannot suspend, and by the time it runs the collecting coroutine is
      * already cancelled, so the close cannot be awaited there.
      */
-    private fun closeSocket() {
+    private fun closeSocket(generation: Int) {
         CoroutineScope(audioDispatcher + SupervisorJob()).launch {
+            // A newer collection may already have opened its own connection on the shared
+            // client; closing it here would kill the live session instead of the dead one.
+            if (connectionGeneration.get() != generation) return@launch
             runCatching { audioClient.disconnect() }
                 .onFailure { Log.e(TAG, "error closing audio socket: $it") }
         }

@@ -24,24 +24,27 @@ class VideoStreamRepositoryImplTest {
         override fun audioPort() = ProtocolConstants.PORT_AUDIO
     }
 
+    private val VSYNC_NANOS = 1_234_567_890L
+
     @Test
     fun `renderFrame is skipped while there is no surface`() {
         val decoder = mockk<HEVCDecoder>(relaxed = true)
         val repo = VideoStreamRepositoryImpl(mockk<TCPClient>(relaxed = true), decoder, transport)
 
-        assertFalse(repo.renderFrame())
-        verify(exactly = 0) { decoder.renderFrame() }
+        assertFalse(repo.renderFrame(VSYNC_NANOS))
+        verify(exactly = 0) { decoder.renderFrame(any()) }
     }
 
     @Test
     fun `renderFrame drives the decoder once a surface is present`() {
         val decoder = mockk<HEVCDecoder>(relaxed = true)
-        every { decoder.renderFrame() } returns true
+        every { decoder.renderFrame(any()) } returns true
         val repo = VideoStreamRepositoryImpl(mockk<TCPClient>(relaxed = true), decoder, transport)
 
         repo.setSurface(mockk<Surface>(relaxed = true))
 
-        assertTrue(repo.renderFrame())
-        verify(exactly = 1) { decoder.renderFrame() }
+        assertTrue(repo.renderFrame(VSYNC_NANOS))
+        // The vsync time must reach the decoder: it is the lip-sync reference clock.
+        verify(exactly = 1) { decoder.renderFrame(VSYNC_NANOS) }
     }
 }
