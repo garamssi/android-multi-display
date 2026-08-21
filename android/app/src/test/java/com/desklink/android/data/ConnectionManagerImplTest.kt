@@ -172,7 +172,19 @@ class ConnectionManagerImplTest {
         manager.managerScope = backgroundScope
 
         manager.connect(config)
-        advanceUntilIdle()
+
+        // runCurrent() before advancing time. The control loop and the reconnect loop run
+        // on `managerScope`, which the test points at `backgroundScope`, and
+        // advanceUntilIdle() stops as soon as the FOREGROUND work is idle — it does not
+        // dispatch a background coroutine that has been launched but never started. Without
+        // this the control loop never reads the socket, the loss is never detected, and the
+        // assertion below sees a still-Connected state that looks like a production bug.
+        runCurrent()
+
+        // Enough virtual time for every attempt plus margin, derived from the constants so
+        // retuning them does not silently make this test vacuous.
+        advanceTimeBy(ProtocolConstants.RECONNECT_DELAY * (ProtocolConstants.RECONNECT_MAX_ATTEMPTS + 2))
+        runCurrent()
 
         assertEquals(
             ConnectionState.Error(ConnectionError.LOST),
