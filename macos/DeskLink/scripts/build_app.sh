@@ -25,6 +25,19 @@ BUILD_DIR=".build/release"
 APP_DIR="build/${APP_NAME}.app"
 INFO_PLIST="DeskLink-Info.plist"
 
+# Wi-Fi (LAN) is served over TLS, and the app refuses to serve it without an identity --
+# a plaintext LAN listener cannot be talked to by the tablet and would carry the pairing PIN
+# in the clear. Created here so a fresh clone gets Wi-Fi without a separate step. Idempotent:
+# an existing identity is left alone, so a rebuild never breaks an already-paired tablet.
+#
+# Not fatal if it fails (a locked keychain, say): USB does not use this, and the app says
+# why Wi-Fi is unavailable in Settings.
+echo "==> Ensuring the LAN TLS identity exists…"
+if ! ./scripts/create_tls_cert.sh --if-missing; then
+  echo "WARNING: could not create the LAN TLS identity. USB still works;"
+  echo "         Wi-Fi will stay unavailable until ./scripts/create_tls_cert.sh succeeds."
+fi
+
 echo "==> Building (swift build -c release)…"
 swift build -c release
 

@@ -69,8 +69,12 @@ public final class TCPServer: StreamServing, PacketReceiving, @unchecked Sendabl
                     params = NWParameters(tls: tls, tcp: tcpOptions)
                     Log.info(.server, "LAN listener: TLS enabled")
                 } else {
-                    params = NWParameters(tls: nil, tcp: tcpOptions)
-                    Log.error(.server, "LAN TLS identity not found — run scripts/create_tls_cert.sh. Serving PLAINTEXT.")
+                    // Reached only if something bound a LAN listener without checking
+                    // LanAvailability first. Refuse rather than serve plaintext: the tablet
+                    // requires TLS here, so this listener could only ever carry a pairing PIN
+                    // in the clear to a client that ignored the same rule.
+                    Log.error(.server, "refusing to serve LAN without TLS — run scripts/create_tls_cert.sh")
+                    throw ConnectionError.refused
                 }
             }
 

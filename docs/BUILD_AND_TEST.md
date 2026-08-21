@@ -173,7 +173,8 @@ adb reverse --remove-all        # 전체 해제
 같은 네트워크에서 Android 앱의 호스트에 **Mac의 IP 주소**를 입력해 연결한다(LAN 포트 7110~7112, TLS+PIN). adb 터널은 불필요. USB 스택(7100~7103)은 그대로 켜져 있어 Wi‑Fi를 켜도 USB는 PIN 없이 연결된다. USB 대비 지연이 크다(스펙 목표 ≤60ms).
 
 사전 준비 두 가지가 필요하다:
-1. `./scripts/create_tls_cert.sh`로 TLS 서버 인증서("DeskLink TLS Server")를 만든다. 없으면 서버가 LAN을 **평문으로** 서비스하며 로그에 `Serving PLAINTEXT`를 남긴다.
+1. TLS 서버 인증서("DeskLink TLS Server")는 `build_app.sh`가 **자동으로 만든다**(`create_tls_cert.sh --if-missing`). 이미 있으면 건드리지 않으므로 재빌드가 페어링을 깨지 않는다. 직접 돌리려면 `./scripts/create_tls_cert.sh`(재실행 시 회전).
+   인증서가 없으면 서버는 LAN을 **아예 서비스하지 않는다**(평문으로 강등하지 않는다). 태블릿은 LAN에서 TLS를 요구하므로 평문 리스너는 대화가 불가능하고, 만약 가능했다면 페어링 PIN이 평문으로 오간다. 이유는 Settings의 Wi-Fi 안내 문구에 표시된다.
 2. Settings → Connection → `Allow Wi-Fi (LAN) connections`를 켜고 서버를 Stop → Start 한다(다음 Start부터 적용).
 
 같은 화면에 표시되는 6자리 PIN을 태블릿에 입력해 페어링한다. PIN은 60초마다 회전한다. 자세한 절차는 [setup.md](setup.md) 2.7과 3.6 참고.
@@ -278,7 +279,7 @@ cd android && ./gradlew lint    # Android Lint 리포트
 | 터치가 반응 없음 | 손쉬운 사용 권한 미부여 | 시스템 설정 → 손쉬운 사용에서 DeskLink 허용(에러 1301) |
 | 권한이 재빌드 후 초기화 | 미서명 실행 파일(`swift run`) | `./scripts/build_and_run.command`로 서명된 `.app` 실행(§3.2) |
 | `codesign failed with identity 'DeskLink Dev'` | 코드 서명 인증서 없음 | `./scripts/create_cert.sh` 실행 |
-| LAN이 평문으로 서비스됨(`Serving PLAINTEXT`) | TLS 서버 인증서 없음 | `./scripts/create_tls_cert.sh` 후 서버 재시작 |
+| Wi-Fi를 켰는데 태블릿이 PIN 단계까지 가지 못함 | TLS 서버 인증서 없음 → LAN 미서비스 | `./scripts/build_app.sh`(자동 생성) 또는 `./scripts/create_tls_cert.sh` 후 서버 재시작. Settings의 Wi-Fi 문구에 이유가 표시된다 |
 | Gradle sync 실패 | JDK 17/21 아님 | JDK 17 또는 21 설치·지정 |
 | Windows/Linux에서 `./gradlew` 실패 | `gradle.properties`의 macOS 절대경로 | [setup.md](setup.md) 4.3 우회 |
 | 포트 충돌(7100~7103) | 다른 프로세스 점유 | `lsof -i :7100` 확인 후 종료. `build_and_run.command`는 자동 처리 |

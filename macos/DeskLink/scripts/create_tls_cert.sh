@@ -12,11 +12,31 @@
 # YOUR Mac) is done by the PIN pairing step on top of TLS, so this self-signed cert does
 # not need to be trusted by a CA. The tablet pins it on first connect (TOFU).
 #
-# Run once:  ./scripts/create_tls_cert.sh
+# Run once:  ./scripts/create_tls_cert.sh              # create, or rotate an existing one
+#            ./scripts/create_tls_cert.sh --if-missing # create only when absent
+#
+# build_app.sh passes --if-missing, so a fresh clone gets Wi-Fi without a separate step
+# while a rebuild never rotates the identity out from under a paired tablet.
 #
 set -euo pipefail
 
 NAME="DeskLink TLS Server"
+
+# `security find-identity` without -v on purpose: -v lists only identities whose trust
+# validates, and this one is self-signed. The app loads it the same way -- by name, without
+# trust evaluation -- so this is the check that matches what the app can actually use. It
+# also proves the PRIVATE KEY is present, which find-certificate would not.
+identity_present() {
+  security find-identity 2>/dev/null | grep -q "$NAME"
+}
+
+if [[ "${1:-}" == "--if-missing" ]]; then
+  if identity_present; then
+    echo "==> TLS identity \"$NAME\" already present; leaving it alone."
+    exit 0
+  fi
+  echo "==> No TLS identity found; creating one so Wi-Fi (LAN) can be served over TLS."
+fi
 KEYCHAIN="$HOME/Library/Keychains/login.keychain-db"
 P12PASS="desklink"
 TMP="$(mktemp -d)"
