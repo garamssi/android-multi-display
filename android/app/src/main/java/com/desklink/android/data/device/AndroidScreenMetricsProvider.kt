@@ -2,8 +2,10 @@ package com.desklink.android.data.device
 
 import android.content.Context
 import android.graphics.Point
+import android.hardware.display.DisplayManager
 import android.os.Build
 import android.util.Log
+import android.view.Display
 import android.view.WindowManager
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
@@ -29,19 +31,20 @@ class AndroidScreenMetricsProvider @Inject constructor(
     }
 
     override fun maxRefreshRate(): Int {
-        val display = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            context.display
-        } else {
-            @Suppress("DEPRECATION")
-            (context.getSystemService(Context.WINDOW_SERVICE) as WindowManager).defaultDisplay
-        }
+        // Queried through DisplayManager, NOT Context.getDisplay(): this provider is
+        // constructed with the application context, and getDisplay() throws
+        // UnsupportedOperationException on any context that is not visual (an Activity or
+        // a window/display context). DisplayManager works from any context.
+        val displayManager = context.getSystemService(Context.DISPLAY_SERVICE) as? DisplayManager
+        val display = displayManager?.getDisplay(Display.DEFAULT_DISPLAY)
+
         // Take the best of the supported modes, not the mode that happens to be active:
         // a panel often idles at 60 Hz and switches up under load, and the handshake is
         // advertising what the device is capable of.
         val fromModes = display?.supportedModes?.maxOfOrNull { it.refreshRate } ?: 0f
         val rate = maxOf(fromModes, display?.refreshRate ?: 0f)
         val rounded = rate.toInt()
-        Log.i(TAG, "native refresh rate: ${rounded} Hz")
+        Log.i(TAG, "native refresh rate: $rounded Hz")
         return if (rounded >= MIN_REFRESH_RATE) rounded else FALLBACK_REFRESH_RATE
     }
 
