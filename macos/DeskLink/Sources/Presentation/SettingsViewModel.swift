@@ -63,8 +63,15 @@ public final class SettingsViewModel {
 
     public private(set) var pairingSecondsRemaining: Int = PairingPin.secondsRemaining()
 
-    public func tickPairing(connected: Bool) {
-        guard !connected else { return }
+    /// `mayRotate` is decided by the server view model, which knows whether a client that
+    /// already paired is on its way back. Deciding it here from `connected` alone rotated the
+    /// PIN during the sub-second gap of a display-mode switch -- and that switch is on this
+    /// very screen, so this tick is always running when it happens.
+    public func tickPairing(mayRotate: Bool) {
+        guard mayRotate else {
+            pairingSecondsRemaining = PairingPin.secondsRemaining()
+            return
+        }
         PairingPin.rotateIfExpired()
         pairingPin = PairingPin.current
         pairingSecondsRemaining = PairingPin.secondsRemaining()

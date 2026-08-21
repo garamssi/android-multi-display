@@ -59,6 +59,22 @@ public final class ServerCoordinator {
 
     private var restartGate = DisplayModeRestartGate()
 
+    /// Why the Wi-Fi channels are not being served, or nil when nothing is wrong. Read by the
+    /// UI so a missing certificate is visible rather than only in the log.
+    public private(set) var lanProblem: String?
+
+    // When an established session last dropped, or nil if none has. Read through
+    // `secondsSincePairedClientDropped` so the pairing PIN is not rotated out from under a
+    // client that is reconnecting.
+    private var sessionDroppedAt: Date?
+
+    /// How long ago an established session dropped, or nil if a client is connected or none
+    /// has ever connected.
+    public var secondsSincePairedClientDropped: TimeInterval? {
+        guard let sessionDroppedAt else { return nil }
+        return Date().timeIntervalSince(sessionDroppedAt)
+    }
+
     private var isBooting = false
 
     // MARK: - Connection state (single source of truth)
@@ -111,7 +127,18 @@ public final class ServerCoordinator {
             audioPort: ProtocolConstants.portAudio,
             requiresPairing: false
         )
-        let lan: ChannelStack? = TransportSettings.wifiEnabled
+        // Decided before binding: a LAN listener without TLS cannot be talked to (the tablet
+        // wraps LAN sockets in TLS) and would carry the pairing PIN in the clear if it could.
+        let lanAvailability = LanAvailability.decide(
+            wifiEnabled: TransportSettings.wifiEnabled,
+            hasTlsIdentity: TlsIdentity.loadSecIdentity() != nil
+        )
+        if let problem = lanAvailability.problemDescription {
+            Log.error(.server, "Wi-Fi not served: \(problem)")
+        }
+        lanProblem = lanAvailability.problemDescription
+
+        let lan: ChannelStack? = lanAvailability.bindsListener
             ? ChannelStack(
                 kind: .lan,
                 scope: .localNetwork,
@@ -233,6 +260,7 @@ public final class ServerCoordinator {
     private func restartSession(into mode: DisplayMode) async {
         guard let config = lastStartConfig else { return }
         Log.info(.server, "display mode changed to \(mode.wireValue); restarting session")
+        if activeSession != nil { sessionDroppedAt = Date() }
         await endSession()
         do {
             try await start(config: config)
@@ -285,6 +313,7 @@ public final class ServerCoordinator {
         guard isRunning else { return }
         activeSession = (info, config, kind)
         connectedTransports.insert(kind)
+        sessionDroppedAt = nil
         Log.info(.server, "client connected on \(kind): \(info.deviceModel) \(config.width)x\(config.height) @\(config.fps) codec=\(config.codec); connected=\(connectedTransports)")
         setConnection(.connected(info, config, kind))
     }
@@ -301,6 +330,9 @@ public final class ServerCoordinator {
         guard connectedTransports.remove(kind) != nil else { return }
         Log.info(.server, "video session ended on \(kind); remaining=\(connectedTransports)")
         guard connectedTransports.isEmpty else { return }
+        // The client retries for a few seconds before giving up, so it is coming back rather
+        // than gone; rotating the pairing PIN in that window would make it fail to return.
+        sessionDroppedAt = Date()
         setConnection(.waiting)
     }
 
@@ -404,6 +436,7 @@ public final class ServerCoordinator {
     }
 
     public func stop() async {
+        sessionDroppedAt = nil
         await endSession()
         // Only a full stop releases the device mappings. A mode-change restart keeps them:
         // re-adding four `adb reverse` mappings takes four process spawns, and until they

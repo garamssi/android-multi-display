@@ -22,6 +22,10 @@ public final class ServerViewModel {
 
     public private(set) var wifiListening = false
 
+    /// Why Wi-Fi is not being served, or nil when nothing is wrong. Surfaced in Settings: a
+    /// missing TLS certificate otherwise shows up only as a PIN that never works.
+    public var lanProblem: String? { coordinator.lanProblem }
+
     public private(set) var pairingPin: String = PairingPin.current
 
     public private(set) var pairingSecondsRemaining: Int = PairingPin.secondsRemaining()
@@ -87,8 +91,17 @@ public final class ServerViewModel {
         }
     }
 
+    /// Whether the pairing PIN may rotate. Also read by Settings, so the two pairing ticks
+    /// cannot disagree.
+    public var pinMayRotate: Bool {
+        PairingPinRotationPolicy.mayRotate(
+            isClientConnected: status == .connected,
+            secondsSinceDrop: coordinator.secondsSincePairedClientDropped
+        )
+    }
+
     public func tickPairing() {
-        guard status == .connecting, wifiListening else { return }
+        guard status == .connecting, wifiListening, pinMayRotate else { return }
         PairingPin.rotateIfExpired()
         pairingPin = PairingPin.current
         pairingSecondsRemaining = PairingPin.secondsRemaining()

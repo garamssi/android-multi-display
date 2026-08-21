@@ -21,3 +21,21 @@ extension Data {
         self.init(bytes)
     }
 }
+
+/// A clock the tests move by hand, so a lockout window is verified without sleeping.
+final class TestClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var current: Date
+
+    init(start: Date = Date(timeIntervalSince1970: 1_700_000_000)) {
+        current = start
+    }
+
+    var now: @Sendable () -> Date {
+        { [self] in lock.withLock { current } }
+    }
+
+    func advance(by seconds: TimeInterval) {
+        lock.withLock { current = current.addingTimeInterval(seconds) }
+    }
+}

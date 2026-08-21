@@ -30,4 +30,10 @@ public enum ProtocolConstants {
 
     public static let pingInterval: UInt64 = 1_000
     public static let pingTimeout: UInt64 = 3_000
+
+    /// How long a client keeps retrying after it loses the connection, from its reconnect
+    /// schedule in docs/protocol-spec.md (200 + 400 + 800 + 1600 + 2000 ms).
+    ///
+    /// The server needs this to tell "the client is coming back" from "the client is gone".
+    public static let clientReconnectWindowSeconds: TimeInterval = 5
 }

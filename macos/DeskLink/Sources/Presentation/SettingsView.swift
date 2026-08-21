@@ -34,7 +34,7 @@ struct SettingsView: View {
         .task {
             while !Task.isCancelled {
                 viewModel.refresh()
-                viewModel.tickPairing(connected: serverViewModel.status == .connected)
+                viewModel.tickPairing(mayRotate: serverViewModel.pinMayRotate)
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
             }
         }
@@ -237,8 +237,12 @@ struct SettingsView: View {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .foregroundStyle(DesignTokens.warningAmber)
                     .font(.system(size: 12))
-                Text("Wi-Fi is experimental. Traffic is encrypted (TLS); pair with the PIN "
-                    + "above and use only on a trusted network. USB stays the default.")
+                // A missing certificate has to be visible here. Without it the PIN simply
+                // never works and nothing on screen says why -- the tablet requires TLS on
+                // Wi-Fi, so it cannot even reach the pairing step.
+                Text(serverViewModel.lanProblem
+                    ?? ("Wi-Fi is experimental. Traffic is encrypted (TLS); pair with the PIN "
+                        + "above and use only on a trusted network. USB stays the default."))
                     .font(.plexSans(size: 12))
                     .foregroundStyle(DesignTokens.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)

@@ -15,15 +15,19 @@ enum DefaultsChangeStream {
         defaults: UserDefaults,
         read: @escaping @Sendable (UserDefaults) -> Value
     ) -> AsyncStream<Value> {
-        AsyncStream { continuation in
-            let state = ChangeObserverState<Value>(initial: read(defaults))
+        // `UserDefaults` is documented as thread-safe and is only read here, so this is the
+        // right model rather than a silenced warning -- the same justification the preference
+        // types themselves carry for being @unchecked Sendable.
+        nonisolated(unsafe) let store = defaults
+        return AsyncStream { continuation in
+            let state = ChangeObserverState<Value>(initial: read(store))
 
             let observer = NotificationCenter.default.addObserver(
                 forName: UserDefaults.didChangeNotification,
-                object: defaults,
+                object: store,
                 queue: nil
             ) { _ in
-                let current = read(defaults)
+                let current = read(store)
                 guard state.updateIfChanged(to: current) else { return }
                 continuation.yield(current)
             }
