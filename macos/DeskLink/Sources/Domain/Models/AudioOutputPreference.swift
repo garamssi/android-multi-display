@@ -29,66 +29,9 @@ public final class AudioOutputPreference: @unchecked Sendable {
 
     /// Emits the value whenever it changes, so a running server can follow the preference
     /// instead of only reading it at start.
-    ///
-    /// Driven by `UserDefaults.didChangeNotification`, which fires for any key, so the
-    /// value is de-duplicated here — a server acting on every unrelated defaults write
-    /// would tear the tap down and rebuild it for no reason.
-    public static var routeToTabletChanges: AsyncStream<Bool> {
-        AsyncStream { continuation in
-            let state = ChangeObserverState()
-            let preference = AudioOutputPreference()
-            state.setLast(preference.routeToTablet)
-
-            let observer = NotificationCenter.default.addObserver(
-                forName: UserDefaults.didChangeNotification,
-                object: UserDefaults.standard,
-                queue: nil
-            ) { _ in
-                let current = preference.routeToTablet
-                guard state.updateIfChanged(to: current) else { return }
-                continuation.yield(current)
-            }
-            state.setObserver(observer)
-
-            continuation.onTermination = { _ in
-                state.removeObserver()
-            }
-        }
-    }
-}
-
-/// Holds the de-duplication state and the observer token for `routeToTabletChanges`.
-///
-/// The notification callback and the stream's termination handler run in different
-/// contexts, so the shared state is behind a lock rather than captured as a `var`.
-private final class ChangeObserverState: @unchecked Sendable {
-    private let lock = NSLock()
-    private var last = false
-    private var observer: NSObjectProtocol?
-
-    func setLast(_ value: Bool) {
-        lock.withLock { last = value }
-    }
-
-    /// Records `value` and reports whether it differs from the previous one.
-    func updateIfChanged(to value: Bool) -> Bool {
-        lock.withLock {
-            guard value != last else { return false }
-            last = value
-            return true
-        }
-    }
-
-    func setObserver(_ observer: NSObjectProtocol) {
-        lock.withLock { self.observer = observer }
-    }
-
-    func removeObserver() {
-        let token = lock.withLock { () -> NSObjectProtocol? in
-            let current = observer
-            observer = nil
-            return current
-        }
-        if let token { NotificationCenter.default.removeObserver(token) }
+    public static func routeToTabletChanges(
+        defaults: UserDefaults = .standard
+    ) -> AsyncStream<Bool> {
+        DefaultsChangeStream.make(defaults: defaults) { $0.bool(forKey: Self.defaultsKey) }
     }
 }

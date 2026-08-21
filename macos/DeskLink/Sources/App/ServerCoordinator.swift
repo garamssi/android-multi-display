@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 
 @MainActor
@@ -15,6 +16,32 @@ public final class ServerCoordinator {
 
     private let audioPreference = AudioOutputPreference()
 
+    private let displayModePreference = DisplayModePreference()
+
+    // Chosen at start() from the preference; bootStreaming only asks it to prepare.
+    private var streamSource: any StreamSourceProviding = VirtualDisplaySource(
+        displayManager: VirtualDisplayManager()
+    )
+
+    private var currentStreamSource: StreamSource?
+
+    // The mode this session was started in, announced to the client in the handshake.
+    private var activeMode: DisplayMode = DisplayModePreference.defaultMode
+
+    private static func makeStreamSource(
+        for mode: DisplayMode,
+        displayManager: any VirtualDisplayManaging
+    ) -> any StreamSourceProviding {
+        switch mode {
+        case .extend:
+            return VirtualDisplaySource(displayManager: displayManager)
+        case .mirror:
+            // The Mac's own main screen. Which display to mirror is a Mac-side choice, and
+            // the main one is the only sensible default.
+            return MirrorDisplaySource(displayID: CGMainDisplayID())
+        }
+    }
+
     // Held so stop() can release the tap synchronously: cancelling the streaming task also
     // releases it, but stop() does not await cancelled tasks, and while a tap is held the
     // Mac's speakers are silent.
@@ -25,6 +52,12 @@ public final class ServerCoordinator {
     private var pipelineTasks: [Task<Void, Never>] = []
 
     private var currentStreamConfig: DisplayConfig?
+
+    // Replayed when a display-mode change restarts the session; the streaming resolution is
+    // renegotiated with the client afterwards, so this is only the starting point.
+    private var lastStartConfig: DisplayConfig?
+
+    private var restartGate = DisplayModeRestartGate()
 
     private var isBooting = false
 
@@ -47,20 +80,34 @@ public final class ServerCoordinator {
         return true
     }
 
-    public init() {}
+    public init() {
+        observeDisplayModePreference()
+    }
 
     private func setConnection(_ new: ConnectionSnapshot) {
         connection = new
     }
 
     public func start(config: DisplayConfig) async throws {
+        // The mode is read once per session: switching it changes the Mac's own display
+        // arrangement, so it takes effect on the next start rather than mid-stream.
+        lastStartConfig = config
+        let mode = displayModePreference.mode
+        streamSource = Self.makeStreamSource(for: mode, displayManager: displayManager)
+        currentStreamSource = nil
+        activeMode = mode
+        // Mirror never accepts input, so its input port is not bound at all.
+        let inputPort: UInt16? = mode.acceptsInput ? ProtocolConstants.portInput : nil
+        let inputPortLan: UInt16? = mode.acceptsInput ? ProtocolConstants.portInputLan : nil
+        Log.info(.server, "display mode: \(mode.wireValue)\(mode.acceptsInput ? "" : " (input disabled)")")
+
         // Fresh stacks/capturer each start: a consumed AsyncStream cannot be re-consumed, so reuse would hang the next client's handshake.
         let usb = ChannelStack(
             kind: .usb,
             scope: .loopback,
             controlPort: ProtocolConstants.portControl,
             videoPort: ProtocolConstants.portVideo,
-            inputPort: ProtocolConstants.portInput,
+            inputPort: inputPort,
             audioPort: ProtocolConstants.portAudio,
             requiresPairing: false
         )
@@ -70,7 +117,7 @@ public final class ServerCoordinator {
                 scope: .localNetwork,
                 controlPort: ProtocolConstants.portControlLan,
                 videoPort: ProtocolConstants.portVideoLan,
-                inputPort: ProtocolConstants.portInputLan,
+                inputPort: inputPortLan,
                 // Audio is USB-only; see startAudioStreamingIfEnabled.
                 audioPort: nil,
                 requiresPairing: true
@@ -150,11 +197,50 @@ public final class ServerCoordinator {
     // the mute, so the user could not get their Mac's sound back without restarting.
     private func observeAudioPreference(for stack: ChannelStack) {
         tasks.append(Task { [weak self] in
-            for await enabled in AudioOutputPreference.routeToTabletChanges {
+            for await enabled in AudioOutputPreference.routeToTabletChanges() {
                 guard let self else { return }
                 await self.applyAudioPreference(enabled, for: stack)
             }
         })
+    }
+
+    // Not in `tasks`: those are cancelled by stop(), and this loop has to survive the stop
+    // that its own restart performs. It costs one notification observer and does nothing
+    // while the server is stopped.
+    private func observeDisplayModePreference() {
+        Task { [weak self] in
+            for await mode in DisplayModePreference.modeChanges() {
+                guard let self else { return }
+                await self.handleDisplayModeChange(mode)
+            }
+        }
+    }
+
+    // The mode decides what is captured and at what size, and the client learns both only
+    // from the handshake, so the session has to be rebuilt. Doing it here rather than asking
+    // the user to press Stop then Start is what keeps the tablet: the client gives up
+    // reconnecting after a few seconds, so a hand-timed restart drops it.
+    private func handleDisplayModeChange(_ mode: DisplayMode) async {
+        guard isRunning else { return }
+        guard var next = restartGate.request(mode, current: activeMode) else { return }
+        while true {
+            await restartSession(into: next)
+            guard let queued = restartGate.finish() else { return }
+            next = queued
+        }
+    }
+
+    private func restartSession(into mode: DisplayMode) async {
+        guard let config = lastStartConfig else { return }
+        Log.info(.server, "display mode changed to \(mode.wireValue); restarting session")
+        await endSession()
+        do {
+            try await start(config: config)
+        } catch {
+            // Surfaced, not swallowed: the UI follows `connection`, which stop() already set
+            // to .stopped, so the user sees a stopped server and can start it again.
+            Log.error(.server, "restart after display mode change failed: \(error)")
+        }
     }
 
     private func applyAudioPreference(_ enabled: Bool, for stack: ChannelStack) async {
@@ -187,7 +273,8 @@ public final class ServerCoordinator {
             onClientDisconnected: {
                 // Keep-alive is intentionally decoupled from UI state: it false-expires during the connect burst, so it must not end the session (video liveness does).
                 Log.info(.server, "control keep-alive lapsed on \(kind) (UI unaffected; video liveness drives state)")
-            }
+            },
+            displayMode: activeMode
         )
         tasks.append(Task { try? await control.run() })
     }
@@ -251,24 +338,50 @@ public final class ServerCoordinator {
             stack.inputServer = TCPServer()
             screenCapturer = SCKScreenCapturer()
             try await stack.videoServer.start(port: stack.videoPort, scope: stack.scope)
-            try await stack.inputServer.start(port: stack.inputPort, scope: stack.scope)
+            if let inputPort = stack.inputPort {
+                try await stack.inputServer.start(port: inputPort, scope: stack.scope)
+            }
         }
 
+        // Only extend needs a display created, and only when the resolution changed; the
+        // provider decides, so this path no longer knows which mode is running.
+        let source: StreamSource
         if previous == nil || resolutionChanged {
-            try await displayManager.createDisplay(config: config)
+            source = try await streamSource.prepare(config: config)
+            currentStreamSource = source
+        } else if let existing = currentStreamSource {
+            source = existing
+        } else {
+            source = try await streamSource.prepare(config: config)
+            currentStreamSource = source
         }
-        let displayID = displayManager.displayID
 
-        if let actual = displayManager.activeResolution {
-            let matches = actual.width == config.width && actual.height == config.height
-            Log.info(.stream, "virtual display active \(actual.width)x\(actual.height) vs requested \(config.width)x\(config.height)\(matches ? "" : " (MISMATCH: private-API mode fallback)")")
+        if source.captureWidth != config.width || source.captureHeight != config.height {
+            Log.info(
+                .stream,
+                "capture size \(source.captureWidth)x\(source.captureHeight) differs from requested "
+                    + "\(config.width)x\(config.height) (mirror uses the display's own size; a virtual "
+                    + "display may have fallen back to another mode)"
+            )
         }
 
-        try await encoder.configure(config: config)
+        // Encode at the size actually being captured. Configuring the encoder from the
+        // request instead would upscale a smaller picture into a larger frame and spend
+        // the whole bitrate on pixels that carry no detail.
+        let captureConfig = config.withResolution(width: source.captureWidth, height: source.captureHeight)
+        try await encoder.configure(config: captureConfig)
         currentStreamConfig = config
 
-        let receiveInput = ReceiveInputUseCase(receiver: stack.inputServer, injector: injector, displayID: displayID)
-        pipelineTasks.append(Task { try? await receiveInput.run() })
+        if source.acceptsInput {
+            let receiveInput = ReceiveInputUseCase(
+                receiver: stack.inputServer,
+                injector: injector,
+                displayID: source.displayID
+            )
+            pipelineTasks.append(Task { try? await receiveInput.run() })
+        } else {
+            Log.info(.stream, "mirror: input disabled; touches would move the cursor on the Mac's own screen")
+        }
 
         let streaming = StartStreamingUseCase(
             displayManager: displayManager,
@@ -287,10 +400,19 @@ public final class ServerCoordinator {
                 await self?.stop()
             }
         )
-        pipelineTasks.append(Task { try? await streaming.execute(config: config, displayID: displayID) })
+        pipelineTasks.append(Task { try? await streaming.execute(config: captureConfig, source: source) })
     }
 
     public func stop() async {
+        await endSession()
+        // Only a full stop releases the device mappings. A mode-change restart keeps them:
+        // re-adding four `adb reverse` mappings takes four process spawns, and until they
+        // are back the client's reconnect attempts are refused outright.
+        await portForwardingWatcher.stop()
+        try? await adbManager.removePortForwarding()
+    }
+
+    private func endSession() async {
         // Flip to .stopped first so isRunning is false and in-flight teardown callbacks are suppressed.
         setConnection(.stopped)
 
@@ -311,10 +433,11 @@ public final class ServerCoordinator {
         // stop() does not await. This guarantees the speakers are back before it returns.
         await audioCapturer?.stopCapture()
         audioCapturer = nil
+        // Only extend has anything to release; mirror's teardown is a no-op.
+        await streamSource.teardown()
+        currentStreamSource = nil
         await injector.stopReceiving()
         await screenCapturer.stopCapture()
         await displayManager.destroyDisplay()
-        await portForwardingWatcher.stop()
-        try? await adbManager.removePortForwarding()
     }
 }
