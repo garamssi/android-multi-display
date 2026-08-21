@@ -15,6 +15,9 @@ sealed interface ConnectionState {
         // Announced by the server. Mirror refuses input, so the UI must gate touch and say
         // why — an unresponsive screen with no explanation reads as a broken app.
         val displayMode: DisplayMode = DisplayMode.DEFAULT,
+        // Also the server's choice: this Mac's screen is not this panel's shape, and which
+        // price to pay for that -- bars or cropped edges -- is set on the Mac.
+        val videoScaling: VideoScaling = VideoScaling.DEFAULT,
     ) : ConnectionState
 
     data class Error(val error: ConnectionError) : ConnectionState

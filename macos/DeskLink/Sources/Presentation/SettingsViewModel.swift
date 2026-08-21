@@ -22,10 +22,12 @@ public final class SettingsViewModel {
     public init(
         permissions: PermissionsManaging = SystemPermissions(),
         audioPreference: AudioOutputPreference = AudioOutputPreference(),
-        displayModePreference: DisplayModePreference = DisplayModePreference()
+        displayModePreference: DisplayModePreference = DisplayModePreference(),
+        videoScalingPreference: VideoScalingPreference = VideoScalingPreference()
     ) {
         self.audioPreference = audioPreference
         self.displayModePreference = displayModePreference
+        self.videoScalingPreference = videoScalingPreference
         self.permissions = permissions
         self.wifiEnabled = TransportSettings.wifiEnabled
         refresh()
@@ -38,9 +40,15 @@ public final class SettingsViewModel {
         set { displayModePreference.mode = newValue }
     }
 
+    public var videoScaling: VideoScaling {
+        get { videoScalingPreference.scaling }
+        set { videoScalingPreference.scaling = newValue }
+    }
+
     // Computed over AudioOutputPreference so there is one source of truth, like verboseLogging.
     private let audioPreference: AudioOutputPreference
     private let displayModePreference: DisplayModePreference
+    private let videoScalingPreference: VideoScalingPreference
 
     public var routeAudioToTablet: Bool {
         get { audioPreference.routeToTablet }

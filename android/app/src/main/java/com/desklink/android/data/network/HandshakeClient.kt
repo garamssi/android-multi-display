@@ -3,6 +3,7 @@ package com.desklink.android.data.network
 import android.os.Build
 import com.desklink.android.domain.model.ConnectionError
 import com.desklink.android.domain.model.DisplayMode
+import com.desklink.android.domain.model.VideoScaling
 import com.desklink.android.domain.model.DisplayConfig
 import com.desklink.android.domain.model.ProtocolConstants
 import org.json.JSONArray
@@ -56,6 +57,7 @@ class HandshakeClient @Inject constructor() {
             serverName = json.optString("serverName", "Unknown"),
             serverVersion = json.optString("serverVersion", "0.0.0"),
             displayMode = DisplayMode.fromWire(json.optString("displayMode")) ?: DisplayMode.DEFAULT,
+            videoScaling = VideoScaling.fromWire(json.optString("videoScaling")),
         )
     }
 
@@ -107,6 +109,7 @@ class HandshakeClient @Inject constructor() {
             val serverName: String,
             val serverVersion: String,
             val displayMode: DisplayMode = DisplayMode.DEFAULT,
+            val videoScaling: VideoScaling = VideoScaling.DEFAULT,
         ) : HandshakeResult
         data class Rejected(val reason: String) : HandshakeResult
         data class Failed(val error: ConnectionError) : HandshakeResult

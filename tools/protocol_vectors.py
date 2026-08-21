@@ -257,6 +257,46 @@ codes_ok = (
 print(f"error codes: {len(ERROR_CODES)} connection-level, 1004={ERROR_CODES[1004]} -> {'OK' if codes_ok else 'FAIL'}")
 failures += 0 if codes_ok else 1
 
+# HANDSHAKE_RESPONSE videoScaling: how the tablet fits the picture to its panel. Absent or
+# unknown means fit, because cropping on a value the client does not understand hides part of
+# the screen for a reason the user cannot see.
+VIDEO_SCALINGS = {"fit", "fill"}
+
+def video_scaling_or_default(value):
+    return value if value in VIDEO_SCALINGS else "fit"
+
+scaling_ok = (
+    video_scaling_or_default("fit") == "fit"
+    and video_scaling_or_default("fill") == "fill"
+    and video_scaling_or_default(None) == "fit"
+    and video_scaling_or_default("stretch") == "fit"
+)
+print(f"videoScaling: fit/fill known, absent+unknown -> fit -> {'OK' if scaling_ok else 'FAIL'}")
+failures += 0 if scaling_ok else 1
+
+# Fit stays inside the panel, fill covers it, and both keep the picture's aspect. Stretching
+# is the answer neither gives.
+def layout(vw, vh, pw, ph, cover):
+    pick = max if cover else min
+    scale = pick(pw / vw, ph / vh)
+    return round(vw * scale), round(vh * scale)
+
+fit_w, fit_h = layout(1512, 982, 3200, 2000, cover=False)
+fill_w, fill_h = layout(1512, 982, 3200, 2000, cover=True)
+layout_ok = (
+    (fit_w, fit_h) == (3079, 2000)
+    and (fill_w, fill_h) == (3200, 2078)
+    and fit_w <= 3200 and fit_h <= 2000
+    and fill_w >= 3200 and fill_h >= 2000
+    and abs(fit_w / fit_h - 1512 / 982) < 0.001
+    and abs(fill_w / fill_h - 1512 / 982) < 0.001
+)
+print(
+    f"video layout 1512x982 on 3200x2000: fit={fit_w}x{fit_h} fill={fill_w}x{fill_h} "
+    f"-> {'OK' if layout_ok else 'FAIL'}"
+)
+failures += 0 if layout_ok else 1
+
 # Reconnect schedule: the first retry has to be fast enough for a server that restarted its
 # own session, without shortening the total window a slow-to-enumerate device needs.
 RECONNECT_DELAYS_MS = [200, 400, 800, 1600, 2000]

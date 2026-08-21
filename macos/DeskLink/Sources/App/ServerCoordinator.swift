@@ -17,6 +17,7 @@ public final class ServerCoordinator {
     private let audioPreference = AudioOutputPreference()
 
     private let displayModePreference = DisplayModePreference()
+    private let videoScalingPreference = VideoScalingPreference()
 
     // Chosen at start() from the preference; bootStreaming only asks it to prepare.
     private var streamSource: any StreamSourceProviding = VirtualDisplaySource(
@@ -25,8 +26,11 @@ public final class ServerCoordinator {
 
     private var currentStreamSource: StreamSource?
 
-    // The mode this session was started in, announced to the client in the handshake.
-    private var activeMode: DisplayMode = DisplayModePreference.defaultMode
+    // What this session was started with, announced to the client in the handshake.
+    private var activeSettings = SessionSettings(
+        mode: DisplayModePreference.defaultMode,
+        scaling: VideoScalingPreference.defaultScaling
+    )
 
     private static func makeStreamSource(
         for mode: DisplayMode,
@@ -57,7 +61,7 @@ public final class ServerCoordinator {
     // renegotiated with the client afterwards, so this is only the starting point.
     private var lastStartConfig: DisplayConfig?
 
-    private var restartGate = DisplayModeRestartGate()
+    private var restartGate = SessionRestartGate()
 
     /// Why the Wi-Fi channels are not being served, or nil when nothing is wrong. Read by the
     /// UI so a missing certificate is visible rather than only in the log.
@@ -108,14 +112,22 @@ public final class ServerCoordinator {
         // The mode is read once per session: switching it changes the Mac's own display
         // arrangement, so it takes effect on the next start rather than mid-stream.
         lastStartConfig = config
-        let mode = displayModePreference.mode
+        let settings = SessionSettings(
+            mode: displayModePreference.mode,
+            scaling: videoScalingPreference.scaling
+        )
+        let mode = settings.mode
         streamSource = Self.makeStreamSource(for: mode, displayManager: displayManager)
         currentStreamSource = nil
-        activeMode = mode
+        activeSettings = settings
         // Mirror never accepts input, so its input port is not bound at all.
         let inputPort: UInt16? = mode.acceptsInput ? ProtocolConstants.portInput : nil
         let inputPortLan: UInt16? = mode.acceptsInput ? ProtocolConstants.portInputLan : nil
-        Log.info(.server, "display mode: \(mode.wireValue)\(mode.acceptsInput ? "" : " (input disabled)")")
+        Log.info(
+            .server,
+            "display mode: \(mode.wireValue)\(mode.acceptsInput ? "" : " (input disabled)")"
+                + ", scaling: \(settings.scaling.wireValue)"
+        )
 
         // Fresh stacks/capturer each start: a consumed AsyncStream cannot be re-consumed, so reuse would hang the next client's handshake.
         let usb = ChannelStack(
@@ -238,18 +250,32 @@ public final class ServerCoordinator {
         Task { [weak self] in
             for await mode in DisplayModePreference.modeChanges() {
                 guard let self else { return }
-                await self.handleDisplayModeChange(mode)
+                await self.handleSettingsChange(mode: mode, scaling: nil)
+            }
+        }
+        Task { [weak self] in
+            for await scaling in VideoScalingPreference.scalingChanges() {
+                guard let self else { return }
+                await self.handleSettingsChange(mode: nil, scaling: scaling)
             }
         }
     }
 
-    // The mode decides what is captured and at what size, and the client learns both only
-    // from the handshake, so the session has to be rebuilt. Doing it here rather than asking
-    // the user to press Stop then Start is what keeps the tablet: the client gives up
-    // reconnecting after a few seconds, so a hand-timed restart drops it.
-    private func handleDisplayModeChange(_ mode: DisplayMode) async {
+    // The mode decides what is captured and at what size; fit/fill decides how the tablet fits
+    // it to its panel. The client learns both only from the handshake, so either change means a
+    // new session. Doing it here rather than asking the user to press Stop then Start is what
+    // keeps the tablet: the client gives up reconnecting after a few seconds, so a hand-timed
+    // restart drops it.
+    //
+    // Whichever value did not change is read from the preference rather than from
+    // `activeSettings`, so two quick changes cannot bring up a session with a stale half.
+    private func handleSettingsChange(mode: DisplayMode?, scaling: VideoScaling?) async {
         guard isRunning else { return }
-        guard var next = restartGate.request(mode, current: activeMode) else { return }
+        let requested = SessionSettings(
+            mode: mode ?? displayModePreference.mode,
+            scaling: scaling ?? videoScalingPreference.scaling
+        )
+        guard var next = restartGate.request(requested, current: activeSettings) else { return }
         while true {
             await restartSession(into: next)
             guard let queued = restartGate.finish() else { return }
@@ -257,9 +283,13 @@ public final class ServerCoordinator {
         }
     }
 
-    private func restartSession(into mode: DisplayMode) async {
+    private func restartSession(into settings: SessionSettings) async {
         guard let config = lastStartConfig else { return }
-        Log.info(.server, "display mode changed to \(mode.wireValue); restarting session")
+        Log.info(
+            .server,
+            "display settings changed to \(settings.mode.wireValue)/\(settings.scaling.wireValue);"
+                + " restarting session"
+        )
         if activeSession != nil { sessionDroppedAt = Date() }
         await endSession()
         do {
@@ -267,7 +297,7 @@ public final class ServerCoordinator {
         } catch {
             // Surfaced, not swallowed: the UI follows `connection`, which stop() already set
             // to .stopped, so the user sees a stopped server and can start it again.
-            Log.error(.server, "restart after display mode change failed: \(error)")
+            Log.error(.server, "restart after a display settings change failed: \(error)")
         }
     }
 
@@ -302,7 +332,8 @@ public final class ServerCoordinator {
                 // Keep-alive is intentionally decoupled from UI state: it false-expires during the connect burst, so it must not end the session (video liveness does).
                 Log.info(.server, "control keep-alive lapsed on \(kind) (UI unaffected; video liveness drives state)")
             },
-            displayMode: activeMode
+            displayMode: activeSettings.mode,
+            videoScaling: activeSettings.scaling
         )
         tasks.append(Task { try? await control.run() })
     }

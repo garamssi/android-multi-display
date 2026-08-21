@@ -5,9 +5,14 @@ public final class HandshakeHandler: Sendable {
     // channel and show that touch is off. The server owns this: a client cannot be trusted
     // to report which mode it is in when that decides whether input is accepted.
     private let displayMode: DisplayMode
+    private let videoScaling: VideoScaling
 
-    public init(displayMode: DisplayMode = DisplayModePreference.defaultMode) {
+    public init(
+        displayMode: DisplayMode = DisplayModePreference.defaultMode,
+        videoScaling: VideoScaling = VideoScalingPreference.defaultScaling
+    ) {
         self.displayMode = displayMode
+        self.videoScaling = videoScaling
     }
 
     // MARK: - Server-side handshake
@@ -142,6 +147,7 @@ public final class HandshakeHandler: Sendable {
             "serverVersion": "1.0.0",
             "osVersion": ProcessInfo.processInfo.operatingSystemVersionString,
             "displayMode": displayMode.wireValue,
+            "videoScaling": videoScaling.wireValue,
         ]
         if let reason = reason {
             json["rejectReason"] = reason

@@ -22,8 +22,8 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.material.icons.Icons
@@ -45,6 +45,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -58,6 +59,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import com.desklink.android.domain.model.VideoScaling
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -104,9 +106,6 @@ fun DisplayScreen(
     // the video keeps its own shape rather than being stretched to fill. Null until the first
     // frame is decoded, which reads as "fill, the shape is not known yet".
     val videoSize by viewModel.videoSize.collectAsState()
-    val videoAspect = videoSize
-        ?.takeIf { it.width > 0 && it.height > 0 }
-        ?.let { it.width.toFloat() / it.height }
 
     // Mirror refuses touch. Saying nothing makes an unresponsive screen read as a broken app,
     // so the reason is shown -- but only in answer to a touch, and only briefly.
@@ -140,6 +139,10 @@ fun DisplayScreen(
     val connectionState by viewModel.connectionState.collectAsStateWithLifecycle()
     val viewOnly = (connectionState as? com.desklink.android.domain.model.ConnectionState.Connected)
         ?.displayMode?.acceptsInput == false
+    // The Mac's choice: bars, or the whole panel with cropped edges.
+    val videoScaling = (connectionState as? com.desklink.android.domain.model.ConnectionState.Connected)
+        ?.videoScaling
+        ?: VideoScaling.DEFAULT
     var exiting by remember { mutableStateOf(false) }
 
     val leaveToConnect = {
@@ -401,19 +404,34 @@ fun DisplayScreen(
         }
     }
 
-    Box(
+    BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.Black),
+            .background(Color.Black)
+            // Fill is sized past the panel on purpose, so the overflow has to be clipped here
+            // rather than drawn over the controls.
+            .clipToBounds(),
     ) {
+        val panelWidth = constraints.maxWidth
+        val panelHeight = constraints.maxHeight
+        val videoDensity = LocalDensity.current
+        val laidOut = when (videoScaling) {
+            VideoScaling.FIT -> VideoLayout.fit(videoSize, panelWidth, panelHeight)
+            VideoScaling.FILL -> VideoLayout.fill(videoSize, panelWidth, panelHeight)
+        }
+
         AndroidView(
-            // Sized by the framework to the stream's own shape, centred. Doing it by hand
-            // meant a layout listener registered in `factory`, which captured the first
-            // composition -- when the decoded size was still unknown -- and re-applied
-            // "fill" on every later layout pass.
-            modifier = videoAspect
-                ?.let { Modifier.align(Alignment.Center).aspectRatio(it) }
-                ?: Modifier.fillMaxSize(),
+            // Given an explicit size rather than a modifier chain: Fill has to exceed the
+            // panel, which `aspectRatio` cannot express because it fits within constraints.
+            // Sizing the view by hand from a layout listener is what broke before -- the
+            // listener lived in `factory`, which runs once and captured a composition where
+            // the decoded size was still unknown.
+            modifier = Modifier
+                .align(Alignment.Center)
+                .size(
+                    width = with(videoDensity) { laidOut.width.toDp() },
+                    height = with(videoDensity) { laidOut.height.toDp() },
+                ),
             factory = { ctx ->
                 val container = FrameLayout(ctx)
                 val surface = SurfaceView(ctx).apply {

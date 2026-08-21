@@ -5,6 +5,7 @@ import com.desklink.android.domain.model.ConnectionError
 import com.desklink.android.domain.model.ConnectionState
 import com.desklink.android.domain.model.DisplayConfig
 import com.desklink.android.domain.model.DisplayMode
+import com.desklink.android.domain.model.VideoScaling
 import com.desklink.android.domain.model.MessageType
 import com.desklink.android.domain.model.ProtocolConstants
 import android.util.Log
@@ -209,6 +210,7 @@ class ConnectionManagerImpl @Inject constructor(
         var serverNonce: ByteArray? = null
         var serverName = "Unknown"
         var displayMode = DisplayMode.DEFAULT
+        var videoScaling = VideoScaling.DEFAULT
         val authenticated = CompletableDeferred<Boolean>()
         val handshaken = CompletableDeferred<Boolean>()
 
@@ -311,6 +313,7 @@ class ConnectionManagerImpl @Inject constructor(
                     is HandshakeClient.HandshakeResult.Accepted -> {
                         session.serverName = result.serverName
                         session.displayMode = result.displayMode
+                        session.videoScaling = result.videoScaling
                     }
 
                     is HandshakeClient.HandshakeResult.Rejected -> {
@@ -350,7 +353,12 @@ class ConnectionManagerImpl @Inject constructor(
                 val finalConfig = negotiatedConfig ?: session.config
                 Log.i(TAG, "START_STREAM received -> Connected (${session.serverName})")
                 _connectionState.value =
-                    ConnectionState.Connected(finalConfig, session.serverName, session.displayMode)
+                    ConnectionState.Connected(
+                        finalConfig,
+                        session.serverName,
+                        session.displayMode,
+                        session.videoScaling,
+                    )
                 // The reader owns the phase: flipping it from the connect path would leave
                 // packets that arrive in this same read dispatched against the old phase.
                 session.phase = ControlPhase.STREAMING

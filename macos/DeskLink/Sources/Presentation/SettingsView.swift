@@ -348,6 +348,32 @@ struct SettingsView: View {
             Text(displayModeDescription)
                 .font(.plexSans(size: 11))
                 .foregroundStyle(DesignTokens.textSecondary)
+
+            Picker("", selection: videoScalingBinding) {
+                Text("Fit").tag(VideoScaling.fit)
+                Text("Fill").tag(VideoScaling.fill)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            Text(videoScalingDescription)
+                .font(.plexSans(size: 11))
+                .foregroundStyle(DesignTokens.textSecondary)
+        }
+    }
+
+    // Names what each choice costs. Neither is free: this Mac's screen is not the tablet's
+    // shape, so something has to give -- bars or edges.
+    private var videoScalingDescription: String {
+        guard viewModel.displayMode == .mirror else {
+            // Extend builds the display from the tablet's own resolution, so the shapes match
+            // and neither choice changes anything. Saying so beats a control that looks broken.
+            return "Only affects Mirror: in Extend the tablet's shape is used already."
+        }
+        switch viewModel.videoScaling {
+        case .fit:
+            return "Whole screen, with bars where the shapes differ."
+        case .fill:
+            return "Fills the tablet, cropping the top and bottom of this Mac's screen."
         }
     }
 
@@ -508,6 +534,10 @@ struct SettingsView: View {
 
     private var verboseBinding: Binding<Bool> {
         Binding(get: { viewModel.verboseLogging }, set: { viewModel.verboseLogging = $0 })
+    }
+
+    private var videoScalingBinding: Binding<VideoScaling> {
+        Binding(get: { viewModel.videoScaling }, set: { viewModel.videoScaling = $0 })
     }
 
     private var displayModeBinding: Binding<DisplayMode> {

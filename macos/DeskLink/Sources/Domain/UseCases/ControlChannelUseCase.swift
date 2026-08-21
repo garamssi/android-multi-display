@@ -22,9 +22,10 @@ public final class ControlChannelUseCase: Sendable {
         onStreamStart: @escaping @Sendable (DisplayConfig) async throws -> Void = { _ in },
         onClientConnected: @escaping @Sendable (ClientInfo, DisplayConfig) async -> Void = { _, _ in },
         onClientDisconnected: @escaping @Sendable () async -> Void = { },
-        displayMode: DisplayMode = DisplayModePreference.defaultMode
+        displayMode: DisplayMode = DisplayModePreference.defaultMode,
+        videoScaling: VideoScaling = VideoScalingPreference.defaultScaling
     ) {
-        self.handshakeHandler = HandshakeHandler(displayMode: displayMode)
+        self.handshakeHandler = HandshakeHandler(displayMode: displayMode, videoScaling: videoScaling)
         self.server = server
         self.receiver = receiver
         self.monitor = monitor
