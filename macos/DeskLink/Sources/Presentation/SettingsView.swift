@@ -24,6 +24,7 @@ struct SettingsView: View {
             statusBanner
             permissionsSection
             connectionSection
+            displaySection
             audioSection
             diagnosticsSection
         }
@@ -329,6 +330,35 @@ struct SettingsView: View {
         Binding(get: { viewModel.wifiEnabled }, set: { viewModel.wifiEnabled = $0 })
     }
 
+    // MARK: - Display
+
+    private var displaySection: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            sectionTitle("Display")
+            Picker("", selection: displayModeBinding) {
+                Text("Extend").tag(DisplayMode.extend)
+                Text("Mirror").tag(DisplayMode.mirror)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            Text(displayModeDescription)
+                .font(.plexSans(size: 11))
+                .foregroundStyle(DesignTokens.textSecondary)
+        }
+    }
+
+    // Spells out all three consequences, because none is obvious from the label: what the
+    // tablet shows, whether touch works, and that switching drops the picture for a moment
+    // (the client is told the mode in the handshake, so the session is rebuilt).
+    private var displayModeDescription: String {
+        switch viewModel.displayMode {
+        case .extend:
+            return "Adds a second display. Touch input works. Switching reconnects the tablet."
+        case .mirror:
+            return "Shows this Mac's screen. Touch is disabled. Switching reconnects the tablet."
+        }
+    }
+
     // MARK: - Audio
 
     private var audioSection: some View {
@@ -474,6 +504,10 @@ struct SettingsView: View {
 
     private var verboseBinding: Binding<Bool> {
         Binding(get: { viewModel.verboseLogging }, set: { viewModel.verboseLogging = $0 })
+    }
+
+    private var displayModeBinding: Binding<DisplayMode> {
+        Binding(get: { viewModel.displayMode }, set: { viewModel.displayMode = $0 })
     }
 
     private var audioBinding: Binding<Bool> {

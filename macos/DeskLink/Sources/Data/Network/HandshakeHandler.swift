@@ -1,7 +1,14 @@
 import Foundation
 
 public final class HandshakeHandler: Sendable {
-    public init() {}
+    // The mode the session is running in, announced so the client can skip the input
+    // channel and show that touch is off. The server owns this: a client cannot be trusted
+    // to report which mode it is in when that decides whether input is accepted.
+    private let displayMode: DisplayMode
+
+    public init(displayMode: DisplayMode = DisplayModePreference.defaultMode) {
+        self.displayMode = displayMode
+    }
 
     // MARK: - Server-side handshake
 
@@ -132,6 +139,7 @@ public final class HandshakeHandler: Sendable {
             "serverName": "DeskLink Mac",
             "serverVersion": "1.0.0",
             "osVersion": ProcessInfo.processInfo.operatingSystemVersionString,
+            "displayMode": displayMode.wireValue,
         ]
         if let reason = reason {
             json["rejectReason"] = reason

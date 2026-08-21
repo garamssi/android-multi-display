@@ -21,7 +21,7 @@ public final class SCKScreenCapturer: NSObject, ScreenCapturing, @unchecked Send
         super.init()
     }
 
-    public func startCapture(displayID: UInt32, fps: Int) -> AsyncThrowingStream<VideoFrame, Error> {
+    public func startCapture(source: StreamSource, fps: Int) -> AsyncThrowingStream<VideoFrame, Error> {
         AsyncThrowingStream<VideoFrame, Error>(bufferingPolicy: .bufferingNewest(3)) { continuation in
             let task = Task { [weak self] in
                 guard let self else {
@@ -29,7 +29,7 @@ public final class SCKScreenCapturer: NSObject, ScreenCapturing, @unchecked Send
                     return
                 }
                 do {
-                    try await self.beginCapture(displayID: displayID, fps: fps, continuation: continuation)
+                    try await self.beginCapture(source: source, fps: fps, continuation: continuation)
                 } catch is CancellationError {
                     continuation.finish()
                 } catch {
@@ -59,10 +59,11 @@ public final class SCKScreenCapturer: NSObject, ScreenCapturing, @unchecked Send
     // MARK: - Private
 
     private func beginCapture(
-        displayID: UInt32,
+        source: StreamSource,
         fps: Int,
         continuation: AsyncThrowingStream<VideoFrame, Error>.Continuation
     ) async throws {
+        let displayID = source.displayID
         // A freshly-created virtual display can take a moment to appear in SCShareableContent; poll briefly for the target displayID.
         Log.info(.capture, "capture: requested virtual displayID=\(displayID)")
         var display: SCDisplay?
@@ -98,8 +99,10 @@ public final class SCKScreenCapturer: NSObject, ScreenCapturing, @unchecked Send
         let filter = SCContentFilter(display: display, excludingWindows: [])
 
         let configuration = SCStreamConfiguration()
-        configuration.width = display.width
-        configuration.height = display.height
+        // Size comes from the StreamSource, not from SCDisplay: SCDisplay reports POINTS,
+        // so on a Retina display using it directly captures half the physical pixels.
+        configuration.width = source.captureWidth
+        configuration.height = source.captureHeight
         configuration.pixelFormat = kCVPixelFormatType_32BGRA
         configuration.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(max(1, fps)))
         // Frames buffered by ScreenCaptureKit before it drops. Deep enough to ride out a

@@ -10,6 +10,9 @@ navigation = "2.8.5"
 junit5 = "5.11.4"
 mockk = "1.13.13"
 turbine = "1.2.0"
+# Android stubs org.json in unit tests (every call throws), so protocol parsing could not
+# be tested at all. The real implementation makes HandshakeClient testable on the JVM.
+orgjson = "20250107"
 
 [libraries]
 # Compose
@@ -46,6 +49,7 @@ junit5-engine = { group = "org.junit.jupiter", name = "junit-jupiter-engine", ve
 mockk = { group = "io.mockk", name = "mockk", version.ref = "mockk" }
 coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-test", version.ref = "coroutines" }
 turbine = { group = "app.cash.turbine", name = "turbine", version.ref = "turbine" }
+orgjson = { group = "org.json", name = "json", version.ref = "orgjson" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

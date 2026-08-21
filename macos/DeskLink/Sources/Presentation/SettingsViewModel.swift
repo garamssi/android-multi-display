@@ -21,16 +21,26 @@ public final class SettingsViewModel {
 
     public init(
         permissions: PermissionsManaging = SystemPermissions(),
-        audioPreference: AudioOutputPreference = AudioOutputPreference()
+        audioPreference: AudioOutputPreference = AudioOutputPreference(),
+        displayModePreference: DisplayModePreference = DisplayModePreference()
     ) {
         self.audioPreference = audioPreference
+        self.displayModePreference = displayModePreference
         self.permissions = permissions
         self.wifiEnabled = TransportSettings.wifiEnabled
         refresh()
     }
 
+    // Computed over DisplayModePreference so there is one source of truth. Read on the next
+    // start: switching mid-session would add or remove a display under the user's windows.
+    public var displayMode: DisplayMode {
+        get { displayModePreference.mode }
+        set { displayModePreference.mode = newValue }
+    }
+
     // Computed over AudioOutputPreference so there is one source of truth, like verboseLogging.
     private let audioPreference: AudioOutputPreference
+    private let displayModePreference: DisplayModePreference
 
     public var routeAudioToTablet: Bool {
         get { audioPreference.routeToTablet }

@@ -2,6 +2,7 @@ package com.desklink.android.data.network
 
 import android.os.Build
 import com.desklink.android.domain.model.ConnectionError
+import com.desklink.android.domain.model.DisplayMode
 import com.desklink.android.domain.model.DisplayConfig
 import com.desklink.android.domain.model.ProtocolConstants
 import org.json.JSONArray
@@ -54,6 +55,7 @@ class HandshakeClient @Inject constructor() {
         return HandshakeResult.Accepted(
             serverName = json.optString("serverName", "Unknown"),
             serverVersion = json.optString("serverVersion", "0.0.0"),
+            displayMode = DisplayMode.fromWire(json.optString("displayMode")) ?: DisplayMode.DEFAULT,
         )
     }
 
@@ -90,7 +92,11 @@ class HandshakeClient @Inject constructor() {
     }
 
     sealed interface HandshakeResult {
-        data class Accepted(val serverName: String, val serverVersion: String) : HandshakeResult
+        data class Accepted(
+            val serverName: String,
+            val serverVersion: String,
+            val displayMode: DisplayMode = DisplayMode.DEFAULT,
+        ) : HandshakeResult
         data class Rejected(val reason: String) : HandshakeResult
         data class Failed(val error: ConnectionError) : HandshakeResult
     }

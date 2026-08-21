@@ -9,7 +9,13 @@ sealed interface ConnectionState {
 
     data class Negotiating(val config: DisplayConfig) : ConnectionState
 
-    data class Connected(val config: DisplayConfig, val serverName: String) : ConnectionState
+    data class Connected(
+        val config: DisplayConfig,
+        val serverName: String,
+        // Announced by the server. Mirror refuses input, so the UI must gate touch and say
+        // why — an unresponsive screen with no explanation reads as a broken app.
+        val displayMode: DisplayMode = DisplayMode.DEFAULT,
+    ) : ConnectionState
 
     data class Error(val error: ConnectionError) : ConnectionState
 

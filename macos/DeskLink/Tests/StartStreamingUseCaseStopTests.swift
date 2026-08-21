@@ -11,6 +11,13 @@ import XCTest
 /// to start sharing again — so the picture froze while the sound played on.
 final class StartStreamingUseCaseStopTests: XCTestCase {
 
+    private static let testSource = StreamSource(
+        displayID: 1,
+        captureWidth: 1600,
+        captureHeight: 1000,
+        acceptsInput: true
+    )
+
     // MARK: - Doubles
 
     private final class StubCapturer: ScreenCapturing, @unchecked Sendable {
@@ -22,7 +29,7 @@ final class StartStreamingUseCaseStopTests: XCTestCase {
 
         var stopCalls: Int { lock.withLock { stopCount } }
 
-        func startCapture(displayID: UInt32, fps: Int) -> AsyncThrowingStream<VideoFrame, Error> {
+        func startCapture(source: StreamSource, fps: Int) -> AsyncThrowingStream<VideoFrame, Error> {
             let error = self.error
             return AsyncThrowingStream { continuation in
                 continuation.finish(throwing: error)
@@ -45,8 +52,8 @@ final class StartStreamingUseCaseStopTests: XCTestCase {
     private final class StubDisplayManager: VirtualDisplayManaging, @unchecked Sendable {
         func createDisplay(config: DisplayConfig) async throws {}
         func destroyDisplay() async {}
-        func updateResolution(width: Int, height: Int) async throws {}
-        var isDisplayActive: Bool { get async { true } }
+        var displayID: UInt32 { 1 }
+        var activeResolution: (width: Int, height: Int)? { nil }
     }
 
     private final class StubStreamServer: StreamServing, @unchecked Sendable {
@@ -104,7 +111,8 @@ final class StartStreamingUseCaseStopTests: XCTestCase {
         let useCase = makeUseCase(capturer: capturer, server: server) {
             ended.value = true
         }
-        let task = Task { try? await useCase.execute(config: DisplayConfig(), displayID: 1) }
+        let source = Self.testSource
+        let task = Task { try? await useCase.execute(config: DisplayConfig(), source: source) }
         server.connectClient()
 
         await waitUntil("session ended") { ended.value }
@@ -125,7 +133,8 @@ final class StartStreamingUseCaseStopTests: XCTestCase {
         let useCase = makeUseCase(capturer: capturer, server: server) {
             ended.value = true
         }
-        let task = Task { try? await useCase.execute(config: DisplayConfig(), displayID: 1) }
+        let source = Self.testSource
+        let task = Task { try? await useCase.execute(config: DisplayConfig(), source: source) }
         server.connectClient()
 
         await waitUntil("capture torn down") { capturer.stopCalls >= 1 }

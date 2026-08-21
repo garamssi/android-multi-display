@@ -51,6 +51,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -448,6 +450,34 @@ fun DisplayScreen(
         if (reconnecting && !exiting) {
             ReconnectingOverlay(modifier = Modifier.fillMaxSize())
         }
+
+        // Mirror refuses touch, so say so. Without this the screen simply does not respond
+        // and that reads as a broken app rather than an intentional mode.
+        val mirroring = (connectionState as? com.desklink.android.domain.model.ConnectionState.Connected)
+            ?.displayMode?.acceptsInput == false
+        if (mirroring && !exiting) {
+            ViewOnlyBadge(modifier = Modifier.align(Alignment.TopCenter))
+        }
+    }
+}
+
+@Composable
+private fun ViewOnlyBadge(modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier
+            .padding(top = 12.dp)
+            .background(
+                DeskLinkTokens.Surface06,
+                RoundedCornerShape(DeskLinkTokens.RadiusButtonLarge),
+            )
+            .padding(horizontal = 14.dp, vertical = 6.dp),
+    ) {
+        Text(
+            text = "Mirroring the Mac — view only",
+            color = DeskLinkTokens.TextSecondary,
+            fontFamily = PlexSans,
+            fontSize = 12.sp,
+        )
     }
 }
 

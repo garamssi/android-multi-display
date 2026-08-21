@@ -179,7 +179,14 @@ class DisplayViewModel @Inject constructor(
         viewModelScope.launch { sendTouchUseCase.send(primaryTouch(action, x, y)) }
     }
 
-    private fun touchInputEnabled(): Boolean = settingsRepository.currentTouchInputEnabled()
+    // Mirror overrides the preference: those touches would move the cursor on the screen
+    // the person at the Mac is using. The server also refuses to bind the input port, so
+    // this is the client half of the same rule rather than the only defence.
+    private fun touchInputEnabled(): Boolean {
+        val state = connectionState.value
+        if (state is ConnectionState.Connected && !state.displayMode.acceptsInput) return false
+        return settingsRepository.currentTouchInputEnabled()
+    }
 
     private fun primaryTouch(action: TouchEvent.Action, x: Float, y: Float) = TouchEvent(
         action = action,

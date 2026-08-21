@@ -32,7 +32,7 @@ public final class StartStreamingUseCase: Sendable {
     }
 
     // Display, encoder, and video server are already started by the composition root; do NOT re-start them here (re-binding the bound server errors).
-    public func execute(config: DisplayConfig, displayID: UInt32) async throws {
+    public func execute(config: DisplayConfig, source: StreamSource) async throws {
         // streamToClient runs in a child task so this loop reacts to reconnects immediately and forces a fresh keyframe + VIDEO_CONFIG (IDR); blocking here leaves the new client black.
         var streamTask: Task<Void, Never>?
         for await _ in streamServer.clientConnections {
@@ -44,7 +44,7 @@ public final class StartStreamingUseCase: Sendable {
             await onClientPresent?()
             streamTask = Task { [self] in
                 do {
-                    try await streamToClient(config: config, displayID: displayID)
+                    try await streamToClient(config: config, source: source)
                     Log.info(.stream, "stream: capture loop ended")
                 } catch is CancellationError {
                 } catch {
@@ -65,12 +65,12 @@ public final class StartStreamingUseCase: Sendable {
         await screenCapturer.stopCapture()
     }
 
-    private func streamToClient(config: DisplayConfig, displayID: UInt32) async throws {
+    private func streamToClient(config: DisplayConfig, source: StreamSource) async throws {
         await encoder.forceKeyframe()
         var didSendConfig = false
         var frameCount = 0
 
-        let frames = screenCapturer.startCapture(displayID: displayID, fps: config.fps)
+        let frames = screenCapturer.startCapture(source: source, fps: config.fps)
         for try await frame in frames {
             let encoded = try await encoder.encode(frame: frame)
 
