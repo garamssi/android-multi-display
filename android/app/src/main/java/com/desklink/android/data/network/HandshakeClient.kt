@@ -14,7 +14,9 @@ class HandshakeClient @Inject constructor() {
     fun buildHandshakeRequest(
         screenWidth: Int,
         screenHeight: Int,
-        maxFps: Int = 120,
+        // No default: a fixed value here was never overridden, so every device advertised
+        // the same capability and the server's fps cap became inert.
+        maxFps: Int,
     ): ByteArray {
         val json = JSONObject().apply {
             put("protocolVersion", ProtocolConstants.PROTOCOL_VERSION)

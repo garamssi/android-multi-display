@@ -7,6 +7,14 @@ public final class SCKScreenCapturer: NSObject, ScreenCapturing, @unchecked Send
     private let lock = NSLock()
     private var stream: SCStream?
     private var output: StreamOutput?
+    // A freshly created virtual display takes a moment to appear in SCShareableContent.
+    // The budget is generous rather than tight: on a loaded machine the wait is longer,
+    // and giving up early surfaces as an outright capture failure.
+    private static let captureQueueDepth = 5
+
+    private static let displayDiscoveryAttempts = 25
+    private static let displayDiscoveryIntervalNanos: UInt64 = 200_000_000
+
     private let sampleQueue = DispatchQueue(label: "com.desklink.sck.output", qos: .userInteractive)
 
     public override init() {
@@ -58,7 +66,7 @@ public final class SCKScreenCapturer: NSObject, ScreenCapturing, @unchecked Send
         // A freshly-created virtual display can take a moment to appear in SCShareableContent; poll briefly for the target displayID.
         Log.info(.capture, "capture: requested virtual displayID=\(displayID)")
         var display: SCDisplay?
-        for attempt in 1...15 {
+        for attempt in 1...Self.displayDiscoveryAttempts {
             try Task.checkCancellation()
             let content: SCShareableContent
             do {
@@ -76,7 +84,7 @@ public final class SCKScreenCapturer: NSObject, ScreenCapturing, @unchecked Send
             }
             let available = content.displays.map { $0.displayID }
             Log.info(.capture, "capture: displayID \(displayID) not found yet (attempt \(attempt)); available=\(available)")
-            try await Task.sleep(nanoseconds: 200_000_000) // 200ms
+            try await Task.sleep(nanoseconds: Self.displayDiscoveryIntervalNanos) // 200ms
         }
 
         guard let display else {
@@ -94,7 +102,9 @@ public final class SCKScreenCapturer: NSObject, ScreenCapturing, @unchecked Send
         configuration.height = display.height
         configuration.pixelFormat = kCVPixelFormatType_32BGRA
         configuration.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(max(1, fps)))
-        configuration.queueDepth = 5
+        // Frames buffered by ScreenCaptureKit before it drops. Deep enough to ride out a
+        // scheduling hiccup, shallow enough that a stall does not deliver stale frames.
+        configuration.queueDepth = Self.captureQueueDepth
         configuration.showsCursor = true
         configuration.scalesToFit = false
 

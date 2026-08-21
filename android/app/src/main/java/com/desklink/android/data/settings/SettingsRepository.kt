@@ -22,6 +22,10 @@ class SettingsRepository @Inject constructor(
             DisplayConfig.forNativeResolution(it.width, it.height)
         }
 
+    // The panel's real maximum, so both the handshake and the fps control describe this
+    // device instead of a fixed figure.
+    val maxRefreshRate: Int = screenMetrics.maxRefreshRate()
+
     val nativeWidth: Int get() = nativeConfig.width
     val nativeHeight: Int get() = nativeConfig.height
 

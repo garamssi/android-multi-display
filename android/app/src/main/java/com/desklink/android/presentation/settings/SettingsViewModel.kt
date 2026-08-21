@@ -47,7 +47,7 @@ class SettingsViewModel @Inject constructor(
                 state.copy(rotation = rotation)
             }
             .combine(settingsRepository.playMacAudio) { state, playMacAudio ->
-                state.copy(playMacAudio = playMacAudio)
+                state.copy(playMacAudio = playMacAudio, maxRefreshRate = settingsRepository.maxRefreshRate)
             }
             .stateIn(
                 scope = viewModelScope,
@@ -61,6 +61,7 @@ class SettingsViewModel @Inject constructor(
                     touchInputEnabled = settingsRepository.currentTouchInputEnabled(),
                     rotation = settingsRepository.currentDisplayRotation(),
                     playMacAudio = settingsRepository.currentPlayMacAudio(),
+                    maxRefreshRate = settingsRepository.maxRefreshRate,
                 ),
             )
 
@@ -147,6 +148,7 @@ data class SettingsUiState(
     val touchInputEnabled: Boolean = true,
     val rotation: DisplayRotation = DisplayRotation.ROTATION_0,
     val playMacAudio: Boolean = SettingsRepository.DEFAULT_PLAY_MAC_AUDIO,
+    val maxRefreshRate: Int = 60,
 ) {
     val isNativeSelected: Boolean get() = width == nativeWidth && height == nativeHeight
 
@@ -154,14 +156,44 @@ data class SettingsUiState(
         val AUDIO_OPTIONS = listOf(
             AudioOption(enabled = true, label = "Play here"),
             AudioOption(enabled = false, label = "Off"),
-        )
+        )        // Presets are DERIVED from the panel, never listed. A fixed list only fits the
+        // device it was written for: the previous one (2560x1600, 1920x1200, 1280x800) was
+        // the 100/75/50% steps of one 16:10 tablet, so on a 16:9 panel those entries change
+        // the aspect ratio and stretch the mirrored desktop, and on a smaller panel almost
+        // all of them get filtered away.
+        val RESOLUTION_SCALE_PERCENTS = listOf(75, 50)
 
-        val RESOLUTION_PRESETS = listOf(
-            2560 to 1600,
-            1920 to 1200,
-            1280 to 800,
-        )
-        val FPS_OPTIONS = listOf(30, 60, 120)
+        // Smallest dimension worth offering. Below this the stream is not useful as a
+        // desktop and some encoders refuse the format outright.
+        const val MIN_PRESET_DIMENSION = 320
+
+        // Resolution options below the "Native" entry, scaled from the panel's own size so
+        // the aspect ratio always matches. Dimensions are rounded DOWN to even numbers:
+        // chroma-subsampled video formats reject odd dimensions, so an odd result would
+        // fail to start the stream.
+        fun resolutionPresets(nativeWidth: Int, nativeHeight: Int): List<Pair<Int, Int>> =
+            RESOLUTION_SCALE_PERCENTS
+                .map { percent ->
+                    toEven(nativeWidth * percent / 100) to toEven(nativeHeight * percent / 100)
+                }
+                .filter { (width, height) ->
+                    width >= MIN_PRESET_DIMENSION && height >= MIN_PRESET_DIMENSION &&
+                        width < nativeWidth && height < nativeHeight
+                }
+                .distinct()
+
+        private fun toEven(value: Int): Int = value - (value % 2)
+        // Candidate frame rates. Offer only the ones the panel can present: a rate above
+        // the refresh rate makes the Mac encode frames that are then dropped, costing
+        // bitrate and CPU for nothing.
+        val FPS_CANDIDATES = listOf(30, 60, 120)
+
+        fun fpsOptions(maxRefreshRate: Int): List<Int> {
+            val supported = FPS_CANDIDATES.filter { it <= maxRefreshRate }
+            // Never present an empty control: an unexpectedly low reading still leaves the
+            // lowest candidate usable.
+            return supported.ifEmpty { listOf(FPS_CANDIDATES.min()) }
+        }
 
         val BITRATE_OPTIONS = listOf(
             BitrateOption(10_000, "Low"),

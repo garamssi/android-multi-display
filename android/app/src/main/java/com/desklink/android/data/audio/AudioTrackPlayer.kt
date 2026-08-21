@@ -83,9 +83,16 @@ class AudioTrackPlayer(
     fun start(): Boolean {
         if (track != null) return true
 
+        // Refuse a layout this cannot map. Falling through to stereo would open a
+        // 2-channel track while bytesPerFrame still described the real count, so the
+        // frame accounting the playout prediction rests on would be wrong by that ratio.
         val channelMask = when (format.channelCount) {
             1 -> AndroidAudioFormat.CHANNEL_OUT_MONO
-            else -> AndroidAudioFormat.CHANNEL_OUT_STEREO
+            2 -> AndroidAudioFormat.CHANNEL_OUT_STEREO
+            else -> {
+                Log.e(TAG, "unsupported channel count ${format.channelCount}")
+                return false
+            }
         }
         val minBufferBytes = AudioTrack.getMinBufferSize(
             format.sampleRate,

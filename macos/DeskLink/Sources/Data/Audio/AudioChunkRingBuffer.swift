@@ -28,8 +28,6 @@ final class AudioChunkRingBuffer: @unchecked Sendable {
         case stored
         /// Stored, but the buffer was full so the oldest pending chunk was discarded.
         case droppedOldest
-        /// Larger than one slot; refused outright.
-        case rejectedTooLarge
         /// Nothing to store (zero-length render quantum).
         case ignoredEmpty
     }
@@ -132,9 +130,10 @@ final class AudioChunkRingBuffer: @unchecked Sendable {
         let written = fill(destination, slotCapacityBytes)
 
         guard written > 0 else {
-            // Nothing was produced. Undo the overflow eviction bookkeeping is not
-            // possible (the old chunk is gone), but no new slot is claimed.
-            return written == 0 && result == .droppedOldest ? .droppedOldest : .ignoredEmpty
+            precondition(written == 0, "producer reported a negative byte count")
+            // Nothing was produced, so no slot is claimed. An eviction that already
+            // happened cannot be undone, and the caller still needs to know about it.
+            return result == .droppedOldest ? .droppedOldest : .ignoredEmpty
         }
         precondition(written <= slotCapacityBytes, "producer wrote past the slot it was lent")
 

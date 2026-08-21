@@ -56,7 +56,15 @@ public actor CoreAudioTapCapturer: AudioCapturing {
     /// Capacity of one ring-buffer slot. A Core Audio render quantum is typically 512
     /// sample frames but is not contractually bounded, so this leaves generous room:
     /// 8192 frames of 16-bit stereo. An oversized quantum is counted, never truncated.
-    private static let slotCapacityBytes = 8192 * 2 * PCMConverter.bytesPerInt16Sample
+    private static let maxQuantumFrames = 8192
+
+    // The tap is created as a stereo mixdown (see createSystemAudioTap), so a slot only
+    // ever has to hold two channels. Named because it is a coupling, not a free constant:
+    // a wider tap would make every quantum oversized and drop all of them.
+    private static let tapChannelCount = 2
+
+    private static let slotCapacityBytes =
+        maxQuantumFrames * tapChannelCount * PCMConverter.bytesPerInt16Sample
 
     /// Slots in flight. At ~10 ms per quantum this is roughly a third of a second of
     /// slack for the consumer — enough to ride out a scheduling hiccup, small enough

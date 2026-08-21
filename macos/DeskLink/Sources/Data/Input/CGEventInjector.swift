@@ -21,9 +21,6 @@ public final class CGEventInjector: InputReceiving, @unchecked Sendable {
         }
     }
 
-    public static func isTrusted() -> Bool {
-        AXIsProcessTrusted()
-    }
 
     // Prompting (unlike the silent AXIsProcessTrusted check) also registers the app in the Accessibility list; without it the app never appears there and input stays blocked.
     @discardableResult

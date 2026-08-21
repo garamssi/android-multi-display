@@ -63,10 +63,7 @@ public final class ADBManager: ADBManaging, @unchecked Sendable {
             return false
         }
         clearProbeFailureLog()
-        let lines = result.output.split(separator: "\n")
-        return lines.contains { line in
-            line.contains("\tdevice") && !line.contains("List of")
-        }
+        return ADBDeviceList.attachedSerials(fromDevicesOutput: result.output).count == 1
     }
 
     private func logProbeFailureOnce(_ error: Error) {

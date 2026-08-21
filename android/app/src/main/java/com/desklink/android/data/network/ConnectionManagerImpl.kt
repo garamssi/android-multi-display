@@ -1,5 +1,6 @@
 package com.desklink.android.data.network
 
+import com.desklink.android.data.device.ScreenMetricsProvider
 import com.desklink.android.domain.model.ConnectionError
 import com.desklink.android.domain.model.ConnectionState
 import com.desklink.android.domain.model.DisplayConfig
@@ -37,6 +38,7 @@ class ConnectionManagerImpl @Inject constructor(
     private val controlClient: TCPClient,
     private val transport: Transport,
     private val pairingKeyProvider: PairingKeyProvider,
+    private val screenMetrics: ScreenMetricsProvider,
 ) : ConnectionRepository {
 
     internal var managerScope: CoroutineScope =
@@ -110,7 +112,12 @@ class ConnectionManagerImpl @Inject constructor(
                 Log.i(TAG, "control channel connected; sending HANDSHAKE_REQUEST")
 
                 // Advertise the REAL native screen size so the Mac's width clamp (min(requested, advertised)) never caps the streaming resolution below the panel's true size.
-                val request = handshakeClient.buildHandshakeRequest(config.nativeWidth, config.nativeHeight)
+                // The refresh rate is advertised for the same reason in the other direction: the Mac caps fps at what the client reports, and a fixed figure made that cap meaningless.
+                val request = handshakeClient.buildHandshakeRequest(
+                    screenWidth = config.nativeWidth,
+                    screenHeight = config.nativeHeight,
+                    maxFps = screenMetrics.maxRefreshRate(),
+                )
                 controlClient.send(MessageType.HANDSHAKE_REQUEST, request)
 
                 _connectionState.value = ConnectionState.Handshaking

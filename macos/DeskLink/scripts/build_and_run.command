@@ -12,7 +12,7 @@ set -euo pipefail
 # Move to the package root (this file lives in macos/DeskLink/scripts).
 cd "$(dirname "$0")/.."
 
-# Stop any previously-running instance so the ports (7100-7102) are free.
+# Stop any previously-running instance so the ports (7100-7103) are free.
 pkill -x DeskLink 2>/dev/null || true
 sleep 0.3
 

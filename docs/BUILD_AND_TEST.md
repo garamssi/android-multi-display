@@ -20,7 +20,7 @@
 ### macOS 서버 빌드용 (Mac에서)
 - **macOS 14 (Sonoma)** 이상 — `Package.swift`의 `.macOS(.v14)`, `DeskLink-Info.plist`의 `LSMinimumSystemVersion`(14.0) 기준. Wi-Fi(LAN) 모드의 Bonjour 광고는 macOS 15 이상에서 `NSBonjourServices` 선언을 요구하며, 이미 Info.plist에 들어 있다.
 - **Xcode 16 이상** — `swift-tools-version: 6.0`이므로 Swift 6 툴체인이 필요하다. 커맨드라인 도구: `xcode-select --install`.
-- **adb** — Mac에 설치되어 있어야 하며, 서버 코드는 `/opt/homebrew/bin/adb` 또는 `/usr/local/bin/adb` 경로만 찾는다(하드코딩).
+- **adb** — Mac에 설치되어 있어야 하며, 서버는 `ANDROID_HOME`/`ANDROID_SDK_ROOT`, Android Studio 기본 SDK, Homebrew 경로를 순서대로 탐색한다.
   ```bash
   brew install --cask android-platform-tools   # adb 설치 (Homebrew cask)
   which adb                                     # 위 두 경로 중 하나에 있어야 함
@@ -91,7 +91,7 @@ cd macos/DeskLink
 ./scripts/create_cert.sh          # 최초 1회: "DeskLink Dev" 코드 서명 인증서 생성
 ./scripts/build_and_run.command   # 빌드 + 서명 + 실행
 ```
-`build_and_run.command`는 기존 인스턴스를 종료해 포트(7100~7102)를 비우고, `swift build -c release` → `build/DeskLink.app` 조립 → `DeskLink Dev`로 서명 → 실행까지 한다. Finder에서 더블클릭해도 되며, 이때는 실행 비트가 필요하다(`chmod +x scripts/*.sh scripts/*.command`).
+`build_and_run.command`는 기존 인스턴스를 종료해 포트(7100~7103)를 비우고, `swift build -c release` → `build/DeskLink.app` 조립 → `DeskLink Dev`로 서명 → 실행까지 한다. Finder에서 더블클릭해도 되며, 이때는 실행 비트가 필요하다(`chmod +x scripts/*.sh scripts/*.command`).
 
 **서명된 `.app`으로만 기기 실행한다.** TCC(권한) 부여는 코드 서명 정체성에 묶이므로, `swift run`으로 띄운 미서명 실행 파일은 재빌드마다 화면 기록·손쉬운 사용 권한이 초기화된다. `swift build` / `swift test`는 로직 검증용이라 무관하다.
 
@@ -170,7 +170,7 @@ adb reverse --remove-all        # 전체 해제
 이후 Android 앱의 연결 화면에서 호스트를 `127.0.0.1`(localhost)로 두고 연결한다.
 
 ### Wi-Fi 모드 (대안)
-같은 네트워크에서 Android 앱의 호스트에 **Mac의 IP 주소**를 입력해 연결한다(LAN 포트 7110~7112, TLS+PIN). adb 터널은 불필요. USB 스택(7100~7102)은 그대로 켜져 있어 Wi‑Fi를 켜도 USB는 PIN 없이 연결된다. USB 대비 지연이 크다(스펙 목표 ≤60ms).
+같은 네트워크에서 Android 앱의 호스트에 **Mac의 IP 주소**를 입력해 연결한다(LAN 포트 7110~7112, TLS+PIN). adb 터널은 불필요. USB 스택(7100~7103)은 그대로 켜져 있어 Wi‑Fi를 켜도 USB는 PIN 없이 연결된다. USB 대비 지연이 크다(스펙 목표 ≤60ms).
 
 사전 준비 두 가지가 필요하다:
 1. `./scripts/create_tls_cert.sh`로 TLS 서버 인증서("DeskLink TLS Server")를 만든다. 없으면 서버가 LAN을 **평문으로** 서비스하며 로그에 `Serving PLAINTEXT`를 남긴다.
@@ -281,7 +281,7 @@ cd android && ./gradlew lint    # Android Lint 리포트
 | LAN이 평문으로 서비스됨(`Serving PLAINTEXT`) | TLS 서버 인증서 없음 | `./scripts/create_tls_cert.sh` 후 서버 재시작 |
 | Gradle sync 실패 | JDK 17/21 아님 | JDK 17 또는 21 설치·지정 |
 | Windows/Linux에서 `./gradlew` 실패 | `gradle.properties`의 macOS 절대경로 | [setup.md](setup.md) 4.3 우회 |
-| 포트 충돌(7100~7102) | 다른 프로세스 점유 | `lsof -i :7100` 확인 후 종료. `build_and_run.command`는 자동 처리 |
+| 포트 충돌(7100~7103) | 다른 프로세스 점유 | `lsof -i :7100` 확인 후 종료. `build_and_run.command`는 자동 처리 |
 
 ---
 

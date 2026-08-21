@@ -1,5 +1,7 @@
 package com.desklink.android.data
 
+import com.desklink.android.data.device.ScreenMetricsProvider
+import com.desklink.android.data.device.ScreenResolution
 import app.cash.turbine.test
 import com.desklink.android.data.network.ConnectionManagerImpl
 import com.desklink.android.data.network.HandshakeClient
@@ -44,6 +46,13 @@ class ConnectionManagerImplTest {
         return hs
     }
 
+    // A fixed panel rate: the handshake must advertise what the device reports, so the
+    // test pins that the value travels rather than a hardcoded figure.
+    private fun fakeScreenMetrics() = object : ScreenMetricsProvider {
+        override fun nativeResolution() = ScreenResolution(2560, 1600)
+        override fun maxRefreshRate() = 60
+    }
+
     private fun fakeTransport() = object : Transport {
         override suspend fun host() = "127.0.0.1"
         override fun controlPort() = ProtocolConstants.PORT_CONTROL
@@ -79,7 +88,7 @@ class ConnectionManagerImplTest {
                 emit(MessageType.START_STREAM to ByteArray(0))
             }
         }
-        val manager = ConnectionManagerImpl(hs, client, fakeTransport(), noAuth())
+        val manager = ConnectionManagerImpl(hs, client, fakeTransport(), noAuth(), fakeScreenMetrics())
         manager.managerScope = backgroundScope
 
         manager.connectionState.test {
@@ -101,7 +110,7 @@ class ConnectionManagerImplTest {
     fun `handshake timeout transitions to Error TIMEOUT and closes socket`() = runTest {
         val hs = fakeHandshakeClient()
         val client = mockClient { flow { kotlinx.coroutines.awaitCancellation() } }
-        val manager = ConnectionManagerImpl(hs, client, fakeTransport(), noAuth())
+        val manager = ConnectionManagerImpl(hs, client, fakeTransport(), noAuth(), fakeScreenMetrics())
         manager.managerScope = backgroundScope
 
         val job = launch { manager.connect(config) }
@@ -124,7 +133,7 @@ class ConnectionManagerImplTest {
         val client = mockClient {
             flow { emit(MessageType.HANDSHAKE_RESPONSE to ByteArray(0)) }
         }
-        val manager = ConnectionManagerImpl(hs, client, fakeTransport(), noAuth())
+        val manager = ConnectionManagerImpl(hs, client, fakeTransport(), noAuth(), fakeScreenMetrics())
         manager.managerScope = backgroundScope
 
         manager.connect(config)
@@ -159,7 +168,7 @@ class ConnectionManagerImplTest {
                 else -> flow<Pair<Byte, ByteArray>> { throw java.io.IOException("lost") }
             }
         }
-        val manager = ConnectionManagerImpl(hs, client, fakeTransport(), noAuth())
+        val manager = ConnectionManagerImpl(hs, client, fakeTransport(), noAuth(), fakeScreenMetrics())
         manager.managerScope = backgroundScope
 
         manager.connect(config)
@@ -189,7 +198,7 @@ class ConnectionManagerImplTest {
                 else -> flow { kotlinx.coroutines.awaitCancellation() } // stay connected
             }
         }
-        val manager = ConnectionManagerImpl(hs, client, fakeTransport(), noAuth())
+        val manager = ConnectionManagerImpl(hs, client, fakeTransport(), noAuth(), fakeScreenMetrics())
         manager.managerScope = backgroundScope
 
         manager.connect(config)
@@ -220,7 +229,7 @@ class ConnectionManagerImplTest {
                 else -> flow { kotlinx.coroutines.awaitCancellation() }
             }
         }
-        val manager = ConnectionManagerImpl(hs, client, fakeTransport(), noAuth())
+        val manager = ConnectionManagerImpl(hs, client, fakeTransport(), noAuth(), fakeScreenMetrics())
         manager.managerScope = backgroundScope
 
         manager.connect(config)
@@ -249,7 +258,7 @@ class ConnectionManagerImplTest {
             rxCalls++
             if (rxCalls % 2 == 1) handshakeSuccessFlow() else flow { kotlinx.coroutines.awaitCancellation() }
         }
-        val manager = ConnectionManagerImpl(hs, client, fakeTransport(), noAuth())
+        val manager = ConnectionManagerImpl(hs, client, fakeTransport(), noAuth(), fakeScreenMetrics())
         manager.managerScope = backgroundScope
 
         manager.connect(config)
@@ -292,7 +301,7 @@ class ConnectionManagerImplTest {
                 handshakeSuccessFlow()
             }
         }
-        val manager = ConnectionManagerImpl(hs, client, fakeTransport(), withKey(key))
+        val manager = ConnectionManagerImpl(hs, client, fakeTransport(), withKey(key), fakeScreenMetrics())
         manager.managerScope = backgroundScope
 
         manager.connect(config)
@@ -323,7 +332,7 @@ class ConnectionManagerImplTest {
                 emit(MessageType.AUTH_CONFIRM to ByteArray(32)) // wrong server proof
             }
         }
-        val manager = ConnectionManagerImpl(hs, client, fakeTransport(), withKey(key))
+        val manager = ConnectionManagerImpl(hs, client, fakeTransport(), withKey(key), fakeScreenMetrics())
         manager.managerScope = backgroundScope
 
         manager.connect(config)
@@ -350,7 +359,7 @@ class ConnectionManagerImplTest {
                 throw java.net.SocketTimeoutException("read timed out")
             }
         }
-        val manager = ConnectionManagerImpl(hs, client, fakeTransport(), withKey(key))
+        val manager = ConnectionManagerImpl(hs, client, fakeTransport(), withKey(key), fakeScreenMetrics())
         manager.managerScope = backgroundScope
 
         manager.connect(config)

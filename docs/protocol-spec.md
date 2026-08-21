@@ -510,16 +510,19 @@ Float32 → Int16 변환은 **32768로 스케일한 뒤 클램프**한다. `-1.0
 | HANDSHAKE_TIMEOUT | 5,000 ms | 핸드셰이크 완료 제한 시간 |
 | PING_INTERVAL | 1,000 ms | Ping 전송 간격 |
 | PING_TIMEOUT | 3,000 ms | Pong 응답 대기 시간 |
-| RECONNECT_DELAY | 1,000 ms | 재연결 초기 대기 시간 |
-| RECONNECT_MAX_DELAY | 30,000 ms | 재연결 최대 대기 시간 (지수 백오프) |
-| RECONNECT_MAX_ATTEMPTS | 10 | 최대 재연결 시도 횟수 |
+| RECONNECT_DELAY | 1,000 ms | 재연결 간격(고정) |
+| RECONNECT_MAX_ATTEMPTS | 5 | 최대 재연결 시도 횟수 |
 | STREAM_START_TIMEOUT | 3,000 ms | 스트림 시작 대기 시간 |
+
+재연결은 **지수 백오프를 쓰지 않는다**. USB에서 연결이 끊기는 것은 대개 종단적(케이블 분리, 서버
+중지)이거나 아주 짧은 끊김이라, 고정 간격 · 낮은 시도 횟수로 약 5초 안에 판정하고 연결 화면으로
+돌아가는 편이 긴 백오프보다 낫다.
 
 ---
 
 ## 9. ADB 포트 포워딩 명령
 
-> **중요**: Mac이 **서버**(7100~7102 리슨)이고 Android가 `127.0.0.1:PORT`로 접속하는 **클라이언트**이므로,
+> **중요**: Mac이 **서버**(7100~7103 리슨)이고 Android가 `127.0.0.1:PORT`로 접속하는 **클라이언트**이므로,
 > `adb forward`(host→device)가 아니라 **`adb reverse`(device→host)** 를 사용한다. `adb forward`는 서버가 기기에 있을 때 쓰는 방향이라 이 구조에서는 연결되지 않는다.
 
 ```bash

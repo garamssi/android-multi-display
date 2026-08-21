@@ -226,7 +226,7 @@ cd macos/DeskLink
 ./scripts/build_and_run.command
 ```
 
-내부 동작: 실행 중인 `DeskLink` 프로세스 종료(포트 7100~7102 해제) → `swift build -c release`
+내부 동작: 실행 중인 `DeskLink` 프로세스 종료(포트 7100~7103 해제) → `swift build -c release`
 → `build/DeskLink.app` 조립(Info.plist, `AppIcon.icns`, 폰트 리소스 번들 복사) →
 `DeskLink Dev`로 서명 → 서명 검증 → `open`.
 
@@ -639,7 +639,7 @@ Windows PowerShell에서는 `./gradlew`가 아니라 `.\gradlew.bat`을 쓴다.
 | 위치 | 내용 | 이 문서의 대응 | 근본 해결 |
 |------|------|----------------|-----------|
 | `android/gradle.properties` | `org.gradle.java.home`에 macOS 절대경로가 하드코딩되어 Windows/Linux에서 `./gradlew`가 즉시 실패한다 | 4.3의 `~/.gradle/gradle.properties` 우회 | 이 줄을 지우고 Gradle Java 툴체인으로 선언 |
-| `macos/.../ADBManager.swift` | adb 탐색 경로가 `/opt/homebrew/bin`, `/usr/local/bin` 두 곳으로 하드코딩되어 있다 | 2.2의 심볼릭 링크 | PATH 탐색 또는 설정 가능한 경로 |
+| `macos/.../ADBManager.swift` | adb 탐색 경로가 `/opt/homebrew/bin`, `/usr/local/bin` 두 곳으로 하드코딩되어 있다 | 2.2의 심볼릭 링크 | 해결됨: `ADBLocator`가 환경변수·SDK·Homebrew를 순서대로 탐색 |
 | `android/.../AndroidManifest.xml` | `POST_NOTIFICATIONS`를 선언하지만 런타임 요청 코드가 없어 Android 13 이상에서 연결 유지 알림이 표시되지 않는다 | 3.4의 수동 부여 | 앱에서 권한을 요청 |
 
 ---

@@ -40,6 +40,7 @@ class ConnectionWiringTest {
         SettingsRepository(
             object : ScreenMetricsProvider {
                 override fun nativeResolution() = ScreenResolution(nativeWidth, nativeHeight)
+                override fun maxRefreshRate() = 60
             },
             FakeSettingsStore(),
         )

@@ -71,11 +71,10 @@ private data class ResolutionOption(
     val isNative: Boolean,
 )
 
-private fun presetName(width: Int, height: Int): String = when {
-    width >= 2560 -> "QHD"
-    width >= 1920 -> "FHD+"
-    else -> "HD"
-}
+// Labelled by its share of the panel rather than a marketing name: a derived preset has
+// no fixed name, and the percentage is what the user is actually choosing.
+private fun presetName(width: Int, nativeWidth: Int): String =
+    if (nativeWidth <= 0) "Scaled" else "${width * 100 / nativeWidth}%"
 
 @Composable
 fun SettingsScreen(
@@ -87,10 +86,10 @@ fun SettingsScreen(
 
     val resolutionOptions = buildList {
         add(ResolutionOption("Native", state.nativeWidth, state.nativeHeight, isNative = true))
-        SettingsUiState.RESOLUTION_PRESETS
-            .filter { (w, h) -> w <= state.nativeWidth && h <= state.nativeHeight }
-            .filterNot { (w, h) -> w == state.nativeWidth && h == state.nativeHeight }
-            .forEach { (w, h) -> add(ResolutionOption(presetName(w, h), w, h, isNative = false)) }
+        SettingsUiState.resolutionPresets(state.nativeWidth, state.nativeHeight)
+            .forEach { (w, h) ->
+                add(ResolutionOption(presetName(w, state.nativeWidth), w, h, isNative = false))
+            }
     }
 
     Box(
@@ -408,7 +407,7 @@ private fun StreamColumn(
             SectionLabel("Frame rate")
             Spacer(Modifier.height(14.dp))
             SegmentedControl(
-                options = SettingsUiState.FPS_OPTIONS,
+                options = SettingsUiState.fpsOptions(state.maxRefreshRate),
                 selected = state.fps,
                 onSelect = onSetFps,
             ) { fps, isSelected ->

@@ -17,6 +17,7 @@ class RoutingSecureChannelTest {
     private fun settings(store: FakeSettingsStore) = SettingsRepository(
         object : ScreenMetricsProvider {
             override fun nativeResolution() = ScreenResolution(2560, 1600)
+            override fun maxRefreshRate() = 60
         },
         store,
     )
