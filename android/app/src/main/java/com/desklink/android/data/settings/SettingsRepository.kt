@@ -153,9 +153,12 @@ class SettingsRepository @Inject constructor(
 
     fun currentLastConnectedHost(): String = _lastConnectedHost.value
 
+    // Clamped to the panel, because a stored resolution outlives the panel it was chosen on:
+    // the same app data reaches a different tablet through a backup restore, and a preset
+    // picked on a larger screen would have the Mac encode pixels this one cannot show.
     private fun loadConfig(): DisplayConfig = nativeConfig.copy(
-        width = store.getInt(KEY_WIDTH, nativeConfig.width),
-        height = store.getInt(KEY_HEIGHT, nativeConfig.height),
+        width = store.getInt(KEY_WIDTH, nativeConfig.width).coerceIn(1, nativeConfig.width),
+        height = store.getInt(KEY_HEIGHT, nativeConfig.height).coerceIn(1, nativeConfig.height),
         fps = store.getInt(KEY_FPS, nativeConfig.fps),
         bitrateKbps = store.getInt(KEY_BITRATE, nativeConfig.bitrateKbps),
         codec = runCatching { DisplayConfig.Codec.valueOf(store.getString(KEY_CODEC, nativeConfig.codec.name)) }

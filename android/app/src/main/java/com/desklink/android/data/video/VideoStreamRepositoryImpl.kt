@@ -54,6 +54,11 @@ class VideoStreamRepositoryImpl @Inject constructor(
         callbackFlow {
             negotiated = config
             configured = false
+            // Installed here, not at configure(): trySend belongs to this flow's scope, and the
+            // size can change on any keyframe if the Mac's own display mode changes.
+            decoder.onDecodedSizeChanged = { width, height ->
+                trySend(VideoStreamRepository.VideoStreamEvent.SizeChanged(width, height))
+            }
             try {
                 val host = transport.host()
                 val port = transport.videoPort()

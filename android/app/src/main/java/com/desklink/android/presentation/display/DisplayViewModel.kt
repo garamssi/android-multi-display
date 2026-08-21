@@ -16,7 +16,9 @@ import com.desklink.android.domain.usecase.SendTouchUseCase
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -33,6 +35,11 @@ class DisplayViewModel @Inject constructor(
 ) : ViewModel() {
 
     val connectionState: StateFlow<ConnectionState> = connectionRepository.connectionState
+
+    // The picture's real size, from the decoded bitstream. Null until the first frame is
+    // decoded, which the view reads as "fill, we do not know the shape yet".
+    private val _videoSize = MutableStateFlow<VideoSize?>(null)
+    val videoSize: StateFlow<VideoSize?> = _videoSize.asStateFlow()
 
     private var videoJob: Job? = null
     private var audioJob: Job? = null
@@ -117,6 +124,17 @@ class DisplayViewModel @Inject constructor(
                 .onFailure { Log.e(TAG, "input channel connect failed", it) }
             videoStream.connect(config).collect { event ->
                 Log.i(TAG, "video event: $event")
+                when (event) {
+                    is VideoStreamRepository.VideoStreamEvent.SizeChanged ->
+                        _videoSize.value = VideoSize(event.width, event.height)
+
+                    is VideoStreamRepository.VideoStreamEvent.StreamStopped ->
+                        // Dropped on purpose: the next session may have a different shape,
+                        // and keeping the old one would letterbox the new picture wrongly.
+                        _videoSize.value = null
+
+                    else -> Unit
+                }
             }
         }
         startAudioStreaming()

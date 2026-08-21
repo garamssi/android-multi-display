@@ -22,6 +22,15 @@ interface VideoStreamRepository {
         data object StreamStarted : VideoStreamEvent
         data object StreamStopped : VideoStreamEvent
         data class FrameAvailable(val timestampUs: Long) : VideoStreamEvent
+
+        /**
+         * The picture's real size, read from the decoded bitstream.
+         *
+         * Not the negotiated resolution: that is what the Mac was asked for, and in mirror
+         * mode it captures its own screen's size instead. The view needs the real one to
+         * avoid stretching the picture to the panel's shape.
+         */
+        data class SizeChanged(val width: Int, val height: Int) : VideoStreamEvent
         data class Error(val message: String) : VideoStreamEvent
     }
 }

@@ -16,9 +16,25 @@ class AndroidScreenMetricsProvider @Inject constructor(
     @ApplicationContext private val context: Context,
 ) : ScreenMetricsProvider {
 
+    // The PANEL's resolution, which is what the Mac has to encode for -- not the window's.
+    // `currentWindowMetrics.bounds` reports the current window, so in split screen it would
+    // call half the panel "native" and the Mac would stream at half size for the rest of the
+    // session. Display.Mode carries the panel's physical size and is unaffected by window
+    // state or rotation.
     override fun nativeResolution(): ScreenResolution {
+        val displayManager = context.getSystemService(Context.DISPLAY_SERVICE) as? DisplayManager
+        val mode = displayManager?.getDisplay(Display.DEFAULT_DISPLAY)?.mode
+        val physical = mode?.let { it.physicalWidth to it.physicalHeight }
+
+        val (px, py) = physical?.takeIf { it.first > 0 && it.second > 0 } ?: windowFallback()
+        Log.i(TAG, "native screen metrics: ${px}x$py")
+        return ScreenResolution(px, py)
+    }
+
+    // Only for a platform that reports no usable mode; the window is the best guess left.
+    private fun windowFallback(): Pair<Int, Int> {
         val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
-        val (px, py) = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             val bounds = windowManager.currentWindowMetrics.bounds
             bounds.width() to bounds.height()
         } else {
@@ -26,8 +42,6 @@ class AndroidScreenMetricsProvider @Inject constructor(
             val point = Point().also { windowManager.defaultDisplay.getRealSize(it) }
             point.x to point.y
         }
-        Log.i(TAG, "native screen metrics: ${px}x$py")
-        return ScreenResolution(px, py)
     }
 
     override fun maxRefreshRate(): Int {

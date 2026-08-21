@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
@@ -42,6 +43,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
@@ -98,6 +100,19 @@ fun DisplayScreen(
     val zoom = remember { ViewZoom() }
     var surfaceView by remember { mutableStateOf<SurfaceView?>(null) }
 
+    // Mirror sends the Mac's own screen, whose shape has nothing to do with this panel's, so
+    // the video keeps its own shape rather than being stretched to fill. Null until the first
+    // frame is decoded, which reads as "fill, the shape is not known yet".
+    val videoSize by viewModel.videoSize.collectAsState()
+    val videoAspect = videoSize
+        ?.takeIf { it.width > 0 && it.height > 0 }
+        ?.let { it.width.toFloat() / it.height }
+
+    // Mirror refuses touch. Saying nothing makes an unresponsive screen read as a broken app,
+    // so the reason is shown -- but only in answer to a touch, and only briefly.
+    var viewOnlyHintVisible by remember { mutableStateOf(false) }
+    var viewOnlyHintJob by remember { mutableStateOf<Job?>(null) }
+
     // Single-finger press is debounced: withheld on DOWN, cancelled if a second finger lands, so two fingers never emit a click.
     var awaitingPress by remember { mutableStateOf(false) }
     var pressed by remember { mutableStateOf(false) }
@@ -123,6 +138,8 @@ fun DisplayScreen(
     var lastScrollTimeMs by remember { mutableLongStateOf(0L) }
 
     val connectionState by viewModel.connectionState.collectAsStateWithLifecycle()
+    val viewOnly = (connectionState as? com.desklink.android.domain.model.ConnectionState.Connected)
+        ?.displayMode?.acceptsInput == false
     var exiting by remember { mutableStateOf(false) }
 
     val leaveToConnect = {
@@ -200,11 +217,24 @@ fun DisplayScreen(
     }
 
     // viewW/viewH are the untransformed touch-layer size (px); getX/getY are screen-space, inverse-mapped through the zoom.
+    // viewW/viewH are the picture's own size: the view holding it is laid out to the stream's
+    // shape, so the bars are outside it and never deliver touches here.
     fun handleTouch(event: MotionEvent, viewW: Int, viewH: Int) {
         val phase = event.toPointerPhase() ?: return
         val count = event.pointerCount
         val w = viewW.toFloat()
         val h = viewH.toFloat()
+
+        // A single finger on a view-only mirror is someone expecting the touch to do
+        // something. Pinch and pan still work here, so only the one-finger case asks.
+        if (viewOnly && phase == PointerPhase.DOWN && count == 1) {
+            viewOnlyHintJob?.cancel()
+            viewOnlyHintVisible = true
+            viewOnlyHintJob = gestureScope.launch {
+                delay(VIEW_ONLY_HINT_MS)
+                viewOnlyHintVisible = false
+            }
+        }
 
         longPressDetector.onEvent(phase, count, event.eventTime, event.getX(0), event.getY(0))
 
@@ -377,7 +407,13 @@ fun DisplayScreen(
             .background(Color.Black),
     ) {
         AndroidView(
-            modifier = Modifier.fillMaxSize(),
+            // Sized by the framework to the stream's own shape, centred. Doing it by hand
+            // meant a layout listener registered in `factory`, which captured the first
+            // composition -- when the decoded size was still unknown -- and re-applied
+            // "fill" on every later layout pass.
+            modifier = videoAspect
+                ?.let { Modifier.align(Alignment.Center).aspectRatio(it) }
+                ?: Modifier.fillMaxSize(),
             factory = { ctx ->
                 val container = FrameLayout(ctx)
                 val surface = SurfaceView(ctx).apply {
@@ -451,11 +487,11 @@ fun DisplayScreen(
             ReconnectingOverlay(modifier = Modifier.fillMaxSize())
         }
 
-        // Mirror refuses touch, so say so. Without this the screen simply does not respond
-        // and that reads as a broken app rather than an intentional mode.
-        val mirroring = (connectionState as? com.desklink.android.domain.model.ConnectionState.Connected)
-            ?.displayMode?.acceptsInput == false
-        if (mirroring && !exiting) {
+        // Shown only when the user actually tries to touch, which is the moment the
+        // explanation is needed and the only moment it is worth screen space. A permanent
+        // badge states something the user set themselves, over the picture, for the whole
+        // session.
+        if (viewOnlyHintVisible && !exiting) {
             ViewOnlyBadge(modifier = Modifier.align(Alignment.TopCenter))
         }
     }
@@ -522,6 +558,9 @@ private const val HANDLE_INITIAL_FRACTION_Y = 0.9f
 private const val FLING_MAX_RELEASE_GAP_MS = 60L
 
 private const val PRESS_DEBOUNCE_MS = 60L
+
+// Long enough to read "touch is off in mirror", short enough not to sit on the picture.
+private const val VIEW_ONLY_HINT_MS = 1_800L
 
 // Guards divide-by-~zero when a two-finger gesture starts with the fingers almost coincident.
 private const val MIN_PINCH_DIST_PX = 1f

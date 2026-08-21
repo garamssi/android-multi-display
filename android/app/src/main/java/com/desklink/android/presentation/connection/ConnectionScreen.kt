@@ -37,6 +37,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.activity.compose.BackHandler
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Cable
 import androidx.compose.material.icons.outlined.Refresh
@@ -141,6 +142,19 @@ fun ConnectionScreen(
                         pairingPhase = PairingPhase.WrongPin
                     }
                 }
+                // The code may well be right: waiting is what helps. Dropping to the
+                // generic failure screen here would offer to retry the network and tell the
+                // user to re-read a PIN that was never the problem.
+                ConnectionError.PAIRING_LOCKED_OUT -> {
+                    pairingSubmitted = false
+                    pairingPhase = PairingPhase.Reentry
+                    Toast.makeText(
+                        context,
+                        ConnectionError.PAIRING_LOCKED_OUT.description,
+                        Toast.LENGTH_LONG,
+                    ).show()
+                }
+
                 else -> pairingTarget = null
             }
         }
@@ -148,6 +162,15 @@ fun ConnectionScreen(
 
     val isBusy = state.isInProgress
     val isError = state is ConnectionState.Error
+
+    // The back gesture is the other half of the Home button. Enabled only for the failure
+    // pane: the connect screen itself should still exit the app, and the pairing pane has its
+    // own back control.
+    BackHandler(enabled = isError) {
+        connectRequested = false
+        pairingTarget = null
+        viewModel.disconnect()
+    }
 
     val pairingTargetNow = pairingTarget
 
@@ -218,6 +241,14 @@ fun ConnectionScreen(
                         viewModel.connect()
                     },
                     onOpenSettings = onSettings,
+                    onGoHome = {
+                        // Clearing the error is what returns to the connect screen: this pane
+                        // is shown because the state is Error, and disconnect() is what puts
+                        // the manager back to Disconnected.
+                        connectRequested = false
+                        pairingTarget = null
+                        viewModel.disconnect()
+                    },
                 )
 
                 transportMode == TransportMode.LAN -> WifiDiscoveryContent(
@@ -844,6 +875,7 @@ private fun ErrorContent(
     transportMode: TransportMode,
     onTryAgain: () -> Unit,
     onOpenSettings: () -> Unit,
+    onGoHome: () -> Unit,
 ) {
     Column(
         modifier = modifier.padding(horizontal = 60.dp),
@@ -901,6 +933,14 @@ private fun ErrorContent(
             OutlineButton(
                 text = "Open Settings",
                 onClick = onOpenSettings,
+                height = 52.dp,
+            )
+            // Without this the failure screen is a dead end: retrying and Settings are the
+            // only ways out, so a user who wants a different server -- or just to stop -- has
+            // no way back.
+            OutlineButton(
+                text = "Home",
+                onClick = onGoHome,
                 height = 52.dp,
             )
         }

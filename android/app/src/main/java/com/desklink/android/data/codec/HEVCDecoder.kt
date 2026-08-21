@@ -33,6 +33,16 @@ class HEVCDecoder @Inject constructor() {
     @Volatile
     var onFrameRendered: ((serverTimestampUs: Long, localNanos: Long) -> Unit)? = null
 
+    /**
+     * The picture's real size, taken from the decoded bitstream.
+     *
+     * The handshake resolution is what the Mac was asked for; mirror captures its own
+     * screen's size instead, and nothing on the wire announces that. Without this the view
+     * would stretch the picture to the panel's shape.
+     */
+    @Volatile
+    var onDecodedSizeChanged: ((width: Int, height: Int) -> Unit)? = null
+
     private data class PendingFrame(val data: ByteArray, val timestampUs: Long)
 
     suspend fun configure(surface: Surface, config: DisplayConfig, csd: ByteArray) =
@@ -125,6 +135,7 @@ class HEVCDecoder @Inject constructor() {
                 }
 
                 outputIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                    reportDecodedSize(codec)
                 }
 
                 outputIndex == INFO_OUTPUT_BUFFERS_CHANGED -> {
@@ -154,6 +165,30 @@ class HEVCDecoder @Inject constructor() {
         return rendered
     }
 
+    // The bitstream is the only place the real picture size is: VIDEO_CONFIG carries the
+    // codec and CSD but no dimensions, and the size requested in the handshake is what the
+    // Mac was ASKED for, not what it captured -- mirror captures its own screen's size.
+    private fun reportDecodedSize(codec: MediaCodec) {
+        val format = try {
+            codec.outputFormat
+        } catch (_: IllegalStateException) {
+            return
+        }
+        // The crop rectangle is the picture; KEY_WIDTH/KEY_HEIGHT can be the padded macroblock
+        // size, which would letterbox against a slightly wrong shape.
+        val width = if (format.containsKey(KEY_CROP_RIGHT) && format.containsKey(KEY_CROP_LEFT)) {
+            format.getInteger(KEY_CROP_RIGHT) - format.getInteger(KEY_CROP_LEFT) + 1
+        } else {
+            format.getInteger(MediaFormat.KEY_WIDTH)
+        }
+        val height = if (format.containsKey(KEY_CROP_BOTTOM) && format.containsKey(KEY_CROP_TOP)) {
+            format.getInteger(KEY_CROP_BOTTOM) - format.getInteger(KEY_CROP_TOP) + 1
+        } else {
+            format.getInteger(MediaFormat.KEY_HEIGHT)
+        }
+        if (width > 0 && height > 0) onDecodedSizeChanged?.invoke(width, height)
+    }
+
     suspend fun release() = withContext(Dispatchers.IO) {
         synchronized(pendingFrames) { pendingFrames.clear() }
         // Detach handle before release so a concurrent submit/render sees no codec; run stop() and release() in separate try blocks so a throwing stop() never skips release().
@@ -177,6 +212,12 @@ class HEVCDecoder @Inject constructor() {
     private companion object {
 
         const val MAX_PENDING_FRAMES = 30
+
+        // MediaFormat crop keys; public constants only exist from API 33, and minSdk is 28.
+        const val KEY_CROP_LEFT = "crop-left"
+        const val KEY_CROP_RIGHT = "crop-right"
+        const val KEY_CROP_TOP = "crop-top"
+        const val KEY_CROP_BOTTOM = "crop-bottom"
 
         // Deprecated but still delivered on API 28 (minSdk).
         @Suppress("DEPRECATION")
