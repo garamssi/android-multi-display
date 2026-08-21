@@ -101,7 +101,8 @@ class DisplayViewModel @Inject constructor(
         started = false
     }
 
-    fun renderFrame(frameTimeNanos: Long): Boolean = videoStream.renderFrame(frameTimeNanos)
+    fun renderFrame(frameTimeNanos: Long, vsyncPeriodNanos: Long): Boolean =
+        videoStream.renderFrame(frameTimeNanos, vsyncPeriodNanos)
 
     fun displayRotation(): DisplayRotation = settingsRepository.currentDisplayRotation()
 

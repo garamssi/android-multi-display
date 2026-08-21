@@ -15,6 +15,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (BOOL)createDisplayWithWidth:(NSUInteger)width
                         height:(NSUInteger)height
                            ppi:(NSUInteger)ppi
+                   refreshRate:(double)refreshRate
                           name:(NSString *)name
                          error:(NSError * _Nullable * _Nullable)error;
 

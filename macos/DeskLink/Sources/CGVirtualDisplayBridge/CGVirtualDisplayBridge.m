@@ -23,6 +23,7 @@ NSErrorDomain const VirtualDisplayBridgeErrorDomain = @"com.desklink.VirtualDisp
     id _displayDescriptor;
     NSString *_displayName;
     NSUInteger _currentPPI;
+    double _currentRefreshRate;
 }
 
 - (instancetype)init {
@@ -31,6 +32,7 @@ NSErrorDomain const VirtualDisplayBridgeErrorDomain = @"com.desklink.VirtualDisp
         _displayID = 0;
         _isActive = NO;
         _currentPPI = 220;
+        _currentRefreshRate = 60.0;
     }
     return self;
 }
@@ -51,6 +53,7 @@ NSErrorDomain const VirtualDisplayBridgeErrorDomain = @"com.desklink.VirtualDisp
 - (BOOL)createDisplayWithWidth:(NSUInteger)width
                         height:(NSUInteger)height
                            ppi:(NSUInteger)ppi
+                   refreshRate:(double)refreshRate
                           name:(NSString *)name
                          error:(NSError **)error {
     if (_isActive) {
@@ -147,7 +150,7 @@ NSErrorDomain const VirtualDisplayBridgeErrorDomain = @"com.desklink.VirtualDisp
         id<DLKVirtualDisplayMode> mode =
             [(id<DLKVirtualDisplayMode>)[modeClass alloc] initWithWidth:(uint32_t)width
                                                                  height:(uint32_t)height
-                                                            refreshRate:60.0];
+                                                            refreshRate:refreshRate];
         id settings = [[settingsClass alloc] init];
         [settings setValue:@[mode] forKey:@"modes"];
         [self trySetValue:@(0) forKey:@"hiDPI" on:settings];
@@ -183,6 +186,7 @@ NSErrorDomain const VirtualDisplayBridgeErrorDomain = @"com.desklink.VirtualDisp
 
     _displayName = name ?: @"DeskLink Display";
     _currentPPI = ppi;
+    _currentRefreshRate = refreshRate;
     _isActive = YES;
 
     return YES;
@@ -214,8 +218,14 @@ NSErrorDomain const VirtualDisplayBridgeErrorDomain = @"com.desklink.VirtualDisp
     // Must recreate to change resolution
     NSString *name = _displayName;
     NSUInteger ppi = _currentPPI;
+    double refreshRate = _currentRefreshRate;
     [self destroyDisplay];
-    return [self createDisplayWithWidth:width height:height ppi:ppi name:name error:error];
+    return [self createDisplayWithWidth:width
+                                height:height
+                                   ppi:ppi
+                           refreshRate:refreshRate
+                                  name:name
+                                 error:error];
 }
 
 @end

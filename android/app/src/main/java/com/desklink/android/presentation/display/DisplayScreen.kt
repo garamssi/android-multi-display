@@ -137,7 +137,9 @@ fun DisplayScreen(
         }
     }
 
-    val vsyncRenderer = remember { VsyncRenderer(renderTick = { frameTimeNanos -> viewModel.renderFrame(frameTimeNanos) }) }
+    val vsyncRenderer = remember { VsyncRenderer(renderTick = { frameTimeNanos, vsyncPeriodNanos ->
+            viewModel.renderFrame(frameTimeNanos, vsyncPeriodNanos)
+        }) }
 
     DisposableEffect(Unit) {
         val activity = context as? Activity

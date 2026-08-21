@@ -100,7 +100,7 @@ class HEVCDecoder @Inject constructor() {
         }
     }
 
-    fun renderFrame(frameTimeNanos: Long): Boolean {
+    fun renderFrame(frameTimeNanos: Long, vsyncPeriodNanos: Long): Boolean {
         val codec = codec ?: return false
 
         pumpInput()
@@ -149,7 +149,7 @@ class HEVCDecoder @Inject constructor() {
         // +1 would understate video latency exactly when the decoder is behind, and the
         // sync path reads that as "audio is late" and speeds up for no reason.
         lastRenderedTimestampUs?.let {
-            onFrameRendered?.invoke(it, frameTimeNanos + releasedThisPass * VSYNC_PERIOD_NANOS)
+            onFrameRendered?.invoke(it, frameTimeNanos + releasedThisPass * vsyncPeriodNanos)
         }
         return rendered
     }
@@ -175,12 +175,6 @@ class HEVCDecoder @Inject constructor() {
     }
 
     private companion object {
-        // A frame released to the Surface is scanned out at the NEXT vsync, so the
-        // instant audio must line up with is one period after the callback's own time.
-        // 60 Hz is assumed: on a faster panel the residual is a few milliseconds, far
-        // inside the sync tolerances, and reading the real refresh rate would drag a
-        // Display dependency into the decoder.
-        private const val VSYNC_PERIOD_NANOS = 16_666_667L
 
         const val MAX_PENDING_FRAMES = 30
 
