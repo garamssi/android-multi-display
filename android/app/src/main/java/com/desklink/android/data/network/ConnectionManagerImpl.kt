@@ -4,6 +4,7 @@ import com.desklink.android.data.device.ScreenMetricsProvider
 import com.desklink.android.domain.model.ConnectionError
 import com.desklink.android.domain.model.ConnectionState
 import com.desklink.android.domain.model.DisplayConfig
+import com.desklink.android.domain.model.DisplayMode
 import com.desklink.android.domain.model.MessageType
 import com.desklink.android.domain.model.ProtocolConstants
 import android.util.Log
@@ -12,7 +13,9 @@ import com.desklink.android.data.security.PairingKeyProvider
 import com.desklink.android.domain.repository.ConnectionRepository
 import com.desklink.android.domain.transport.Transport
 import java.security.SecureRandom
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -22,7 +25,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.takeWhile
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -101,12 +103,26 @@ class ConnectionManagerImpl @Inject constructor(
             Log.i(TAG, "connecting control channel to $host:$port")
             controlClient.connect(host, port)
 
+            // The key has to be known before the reader starts: on LAN the server sends its
+            // AUTH_CHALLENGE unprompted, and a challenge read with no key to answer it is a
+            // packet thrown away.
+            val session = ControlSession(config, pairingKeyProvider.currentKey())
+
+            // ONE reader for this socket's whole life. Reading it with a fresh framed-packet
+            // reader per phase loses the bytes the previous reader had already pulled off the
+            // socket but not yet emitted, which desynchronizes the frame stream for good --
+            // no PONG, no DISCONNECT, ever again on that connection.
+            controlLoopJob = managerScope.launch { runControlReader(session) }
+
             // A coroutine withTimeout cannot interrupt a blocking read stuck on a silent server (the wrong-PIN case), so time-box the handshake at the socket level; blocking reads are restored below.
             controlClient.setReadTimeout(ProtocolConstants.HANDSHAKE_TIMEOUT.toInt())
             val connected = try {
-                pairingKeyProvider.currentKey()?.let { key ->
+                if (session.authKey != null) {
                     Log.i(TAG, "authenticating LAN connection with pairing PIN")
-                    runClientAuth(key)
+                    val authenticated = withTimeout(ProtocolConstants.HANDSHAKE_TIMEOUT) {
+                        session.authenticated.await()
+                    }
+                    if (!authenticated) throw PairingAuthException("LAN pairing authentication failed")
                 }
 
                 Log.i(TAG, "control channel connected; sending HANDSHAKE_REQUEST")
@@ -123,17 +139,19 @@ class ConnectionManagerImpl @Inject constructor(
                 _connectionState.value = ConnectionState.Handshaking
 
                 withTimeout(ProtocolConstants.HANDSHAKE_TIMEOUT) {
-                    runHandshake(config)
+                    session.handshaken.await()
                 }
             } finally {
                 controlClient.setReadTimeout(0)
             }
 
-            if (connected) {
-                // Set intent BEFORE starting the control loop so a loss the loop detects immediately is treated as unintentional (and reconnects), closing a startup race.
-                intendedConnected = true
-                // Start the reader + keep-alive only AFTER the handshake collection ends, so two collectors never read the same socket InputStream concurrently.
-                startControlLoop()
+            if (connected && !claim(session)) {
+                // Died between START_STREAM and here. Reporting Connected would leave a
+                // session nobody reads; failing the attempt hands the retry to the caller.
+                lastFailureError = ConnectionError.LOST
+                controlClient.disconnect()
+                false
+            } else if (connected) {
                 true
             } else {
                 controlClient.disconnect()
@@ -164,126 +182,209 @@ class ConnectionManagerImpl @Inject constructor(
         }
     }
 
-    private suspend fun runHandshake(config: DisplayConfig): Boolean {
-        var handshakeComplete = false
-        var connected = false
-        var serverName = "Unknown"
+    // Phases of one control connection. They share a reader, so the phase decides how a
+    // packet is handled rather than which reader is attached.
+    private enum class ControlPhase { AUTH, HANDSHAKE, STREAMING }
 
-        controlClient.receivePackets()
-            .takeWhile { !handshakeComplete }
-            .collect { (type, payload) ->
-                Log.i(TAG, "control rx type=0x${type.toInt().and(0xFF).toString(16)}")
-                when (type) {
-                    MessageType.HANDSHAKE_RESPONSE -> {
-                        when (val result = handshakeClient.parseHandshakeResponse(payload)) {
-                            is HandshakeClient.HandshakeResult.Accepted -> {
-                                serverName = result.serverName
-                            }
-
-                            is HandshakeClient.HandshakeResult.Rejected -> {
-                                lastFailureError = ConnectionError.REFUSED
-                                handshakeComplete = true
-                                return@collect
-                            }
-
-                            is HandshakeClient.HandshakeResult.Failed -> {
-                                lastFailureError = result.error
-                                handshakeComplete = true
-                                return@collect
-                            }
-                        }
-
-                        _connectionState.value = ConnectionState.Negotiating(config)
-                        val configRequest = handshakeClient.buildConfigRequest(config)
-                        controlClient.send(MessageType.CONFIG_REQUEST, configRequest)
-                    }
-
-                    MessageType.CONFIG_RESPONSE -> {
-                        val negotiated = handshakeClient.parseConfigResponse(payload)
-                        if (negotiated != null) {
-                            // Preserve the native size (CONFIG_RESPONSE echoes only the negotiated streaming resolution) so a later reconnect still advertises the true panel size.
-                            negotiatedConfig = negotiated.copy(
-                                nativeWidth = config.nativeWidth,
-                                nativeHeight = config.nativeHeight,
-                            )
-                        } else {
-                            _connectionState.value =
-                                ConnectionState.Error(ConnectionError.CONFIG_NEGOTIATION_FAILED)
-                            handshakeComplete = true
-                        }
-                    }
-
-                    MessageType.START_STREAM -> {
-                        val finalConfig = negotiatedConfig ?: config
-                        Log.i(TAG, "START_STREAM received -> Connected ($serverName)")
-                        _connectionState.value = ConnectionState.Connected(finalConfig, serverName)
-                        connected = true
-                        handshakeComplete = true
-                    }
-
-                    MessageType.ERROR -> {
-                        lastFailureError = ConnectionError.REFUSED
-                        handshakeComplete = true
-                    }
-
-                    else -> { /* ignore other messages during handshake */ }
-                }
-            }
-        return connected
-    }
-
-    // This packet collection completes before runHandshake starts its own, so the two never read the socket concurrently.
-    private suspend fun runClientAuth(key: ByteArray) {
-        val clientNonce = ByteArray(ProtocolConstants.AUTH_NONCE_LENGTH)
+    // State of one control connection, owned by the reader coroutine and awaited by the
+    // connect path through its deferreds.
+    private inner class ControlSession(val config: DisplayConfig, val authKey: ByteArray?) {
+        var phase = if (authKey == null) ControlPhase.HANDSHAKE else ControlPhase.AUTH
+        val clientNonce: ByteArray = ByteArray(ProtocolConstants.AUTH_NONCE_LENGTH)
             .also { SecureRandom().nextBytes(it) }
         var serverNonce: ByteArray? = null
-        var authenticated = false
-        var done = false
+        var serverName = "Unknown"
+        var displayMode = DisplayMode.DEFAULT
+        val authenticated = CompletableDeferred<Boolean>()
+        val handshaken = CompletableDeferred<Boolean>()
 
-        // Wall-clock deadline: the server PINGs an unauthenticated client every second, so a wrong PIN yields a steady frame stream (never a read timeout) that would otherwise wait forever for an AUTH_CONFIRM.
-        val deadlineNanos = System.nanoTime() + ProtocolConstants.HANDSHAKE_TIMEOUT * 1_000_000L
+        // Set once the connect path has taken ownership of this session, and once the reader
+        // has seen it die. Together they close the window between START_STREAM and the
+        // attempt returning: a socket that dies in there must fail the attempt, not be
+        // reported as a live session with nobody watching it.
+        val established = AtomicBoolean(false)
+        val lost = AtomicBoolean(false)
 
-        try {
-            controlClient.receivePackets()
-                .takeWhile { !done }
-                .collect { (type, payload) ->
-                    when (type) {
-                        MessageType.AUTH_CHALLENGE -> {
-                            if (payload.size != ProtocolConstants.AUTH_NONCE_LENGTH) {
-                                done = true
-                                return@collect
-                            }
-                            serverNonce = payload
-                            val proof = PairingAuth.clientProof(key, payload, clientNonce)
-                            controlClient.send(MessageType.AUTH_RESPONSE, clientNonce + proof)
-                        }
-
-                        MessageType.AUTH_CONFIRM -> {
-                            val sNonce = serverNonce
-                            if (sNonce != null &&
-                                PairingAuth.verify(payload, PairingAuth.serverProof(key, sNonce, clientNonce))
-                            ) {
-                                authenticated = true
-                            }
-                            done = true
-                        }
-
-                        else -> { /* ignore keep-alive/other frames until authenticated */ }
-                    }
-                    if (!authenticated && System.nanoTime() >= deadlineNanos) {
-                        throw PairingAuthException("pairing timed out awaiting AUTH_CONFIRM")
-                    }
-                }
-        } catch (_: java.net.SocketTimeoutException) {
-            // A read timeout after auth succeeded is only the trailing read that lets takeWhile stop, so it is not a failure; incomplete auth means the server went silent.
-            if (!authenticated) throw PairingAuthException("pairing timed out awaiting AUTH_CONFIRM")
+        // Releases whoever is waiting so a dead socket surfaces as a failed attempt rather
+        // than as a five-second timeout.
+        fun abandon() {
+            authenticated.complete(false)
+            handshaken.complete(false)
         }
-
-        if (!authenticated) throw PairingAuthException("LAN pairing authentication failed")
     }
 
-    private fun startControlLoop() {
-        controlLoopJob?.cancel()
+    private suspend fun runControlReader(session: ControlSession) {
+        try {
+            controlClient.receivePackets().collect { (type, payload) ->
+                // Answered in every phase: the server pings from the moment the socket opens,
+                // and a phase that ignores pings makes the server declare the client gone.
+                if (type == MessageType.PING) {
+                    controlClient.send(MessageType.PONG, payload)
+                    return@collect
+                }
+                when (session.phase) {
+                    ControlPhase.AUTH -> handleAuthPacket(session, type, payload)
+                    ControlPhase.HANDSHAKE -> handleHandshakePacket(session, type, payload)
+                    ControlPhase.STREAMING -> handleStreamingPacket(session, type, payload)
+                }
+            }
+            Log.i(TAG, "control stream ended")
+            noteLost(session)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // Which path detects the loss decides how long the user waits, so name it.
+            Log.i(TAG, "control read failed (${e.javaClass.simpleName})")
+            noteLost(session)
+        }
+    }
+
+    // The one place a dead control connection is recorded. Whether it also starts a reconnect
+    // depends on who owns the session: before the connect path has claimed it, the attempt
+    // itself must fail, or a reconnect would race the attempt that is still running.
+    private fun noteLost(session: ControlSession) {
+        session.lost.set(true)
+        session.abandon()
+        if (session.established.get()) onConnectionLost()
+    }
+
+    private suspend fun handleAuthPacket(session: ControlSession, type: Byte, payload: ByteArray) {
+        val key = session.authKey ?: return
+        when (type) {
+            MessageType.AUTH_CHALLENGE -> {
+                if (payload.size != ProtocolConstants.AUTH_NONCE_LENGTH) {
+                    session.authenticated.complete(false)
+                    return
+                }
+                session.serverNonce = payload
+                val proof = PairingAuth.clientProof(key, payload, session.clientNonce)
+                controlClient.send(MessageType.AUTH_RESPONSE, session.clientNonce + proof)
+            }
+
+            MessageType.AUTH_CONFIRM -> {
+                val serverNonce = session.serverNonce
+                val ok = serverNonce != null &&
+                    PairingAuth.verify(
+                        payload,
+                        PairingAuth.serverProof(key, serverNonce, session.clientNonce),
+                    )
+                if (ok) session.phase = ControlPhase.HANDSHAKE
+                session.authenticated.complete(ok)
+            }
+
+            else -> { /* nothing else is meaningful before the client is authenticated */ }
+        }
+    }
+
+    private suspend fun handleHandshakePacket(
+        session: ControlSession,
+        type: Byte,
+        payload: ByteArray,
+    ) {
+        Log.i(TAG, "control rx type=0x${type.toInt().and(0xFF).toString(16)}")
+        when (type) {
+            MessageType.HANDSHAKE_RESPONSE -> {
+                when (val result = handshakeClient.parseHandshakeResponse(payload)) {
+                    is HandshakeClient.HandshakeResult.Accepted -> {
+                        session.serverName = result.serverName
+                        session.displayMode = result.displayMode
+                    }
+
+                    is HandshakeClient.HandshakeResult.Rejected -> {
+                        lastFailureError = ConnectionError.REFUSED
+                        session.handshaken.complete(false)
+                        return
+                    }
+
+                    is HandshakeClient.HandshakeResult.Failed -> {
+                        lastFailureError = result.error
+                        session.handshaken.complete(false)
+                        return
+                    }
+                }
+
+                _connectionState.value = ConnectionState.Negotiating(session.config)
+                val configRequest = handshakeClient.buildConfigRequest(session.config)
+                controlClient.send(MessageType.CONFIG_REQUEST, configRequest)
+            }
+
+            MessageType.CONFIG_RESPONSE -> {
+                val negotiated = handshakeClient.parseConfigResponse(payload)
+                if (negotiated != null) {
+                    // Preserve the native size (CONFIG_RESPONSE echoes only the negotiated streaming resolution) so a later reconnect still advertises the true panel size.
+                    negotiatedConfig = negotiated.copy(
+                        nativeWidth = session.config.nativeWidth,
+                        nativeHeight = session.config.nativeHeight,
+                    )
+                } else {
+                    _connectionState.value =
+                        ConnectionState.Error(ConnectionError.CONFIG_NEGOTIATION_FAILED)
+                    session.handshaken.complete(false)
+                }
+            }
+
+            MessageType.START_STREAM -> {
+                val finalConfig = negotiatedConfig ?: session.config
+                Log.i(TAG, "START_STREAM received -> Connected (${session.serverName})")
+                _connectionState.value =
+                    ConnectionState.Connected(finalConfig, session.serverName, session.displayMode)
+                // The reader owns the phase: flipping it from the connect path would leave
+                // packets that arrive in this same read dispatched against the old phase.
+                session.phase = ControlPhase.STREAMING
+                session.handshaken.complete(true)
+            }
+
+            MessageType.DISCONNECT -> {
+                // The server changed its mind between START_STREAM and here; treat it as a
+                // failed attempt so the reconnect loop, not this attempt, owns the retry.
+                lastFailureError = ConnectionError.LOST
+                session.handshaken.complete(false)
+            }
+
+            MessageType.ERROR -> {
+                lastFailureError = ConnectionError.REFUSED
+                session.handshaken.complete(false)
+            }
+
+            else -> { /* ignore other messages during the handshake */ }
+        }
+    }
+
+    private suspend fun handleStreamingPacket(
+        session: ControlSession,
+        type: Byte,
+        payload: ByteArray,
+    ) {
+        if (keepAlive?.onPacket(type, payload) == true) return
+        when (type) {
+            MessageType.DISCONNECT -> {
+                Log.i(TAG, "DISCONNECT received")
+                noteLost(session)
+            }
+
+            MessageType.ERROR ->
+                _connectionState.value = ConnectionState.Error(ConnectionError.LOST)
+
+            else -> { /* video/input handled on their own channels */ }
+        }
+    }
+
+    // Takes ownership of a handshaken session. Returns false when the reader already died,
+    // in which case nothing is started and the caller fails the attempt.
+    private fun claim(session: ControlSession): Boolean {
+        session.established.set(true)
+        if (session.lost.get()) {
+            controlLoopJob?.cancel()
+            controlLoopJob = null
+            return false
+        }
+        // Set intent BEFORE the keep-alive starts so a loss it detects immediately is treated as unintentional (and reconnects), closing a startup race.
+        intendedConnected = true
+        startKeepAlive()
+        return true
+    }
+
+    private fun startKeepAlive() {
         val ka = KeepAliveController(
             scope = managerScope,
             send = { type, payload -> controlClient.send(type, payload) },
@@ -291,25 +392,8 @@ class ConnectionManagerImpl @Inject constructor(
         )
         keepAlive = ka
         ka.start()
-
-        controlLoopJob = managerScope.launch {
-            try {
-                controlClient.receivePackets().collect { (type, payload) ->
-                    if (keepAlive?.onPacket(type, payload) == true) return@collect
-                    when (type) {
-                        MessageType.DISCONNECT -> onConnectionLost()
-                        MessageType.ERROR ->
-                            _connectionState.value = ConnectionState.Error(ConnectionError.LOST)
-                        else -> { /* video/input handled on their own channels */ }
-                    }
-                }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (_: Exception) {
-                onConnectionLost()
-            }
-        }
     }
+
 
     private fun onConnectionLost() {
         keepAlive?.stop()
@@ -323,11 +407,9 @@ class ConnectionManagerImpl @Inject constructor(
 
     private suspend fun reconnectLoop() {
         val config = negotiatedConfig ?: lastRequestedConfig ?: DisplayConfig()
-        var attempt = 0
-        while (attempt < ProtocolConstants.RECONNECT_MAX_ATTEMPTS) {
-            attempt++
+        for (delayMillis in ProtocolConstants.RECONNECT_DELAYS_MS) {
             _connectionState.value = ConnectionState.Reconnecting
-            delay(ProtocolConstants.RECONNECT_DELAY)
+            delay(delayMillis)
             if (!intendedConnected) return
             val connected = connectionMutex.withLock {
                 if (!intendedConnected) false else attemptConnect(config)

@@ -35,8 +35,15 @@ object ProtocolConstants {
     const val HANDSHAKE_TIMEOUT = 5_000L
     const val PING_INTERVAL = 1_000L
     const val PING_TIMEOUT = 3_000L
-    const val RECONNECT_DELAY = 1_000L
-    const val RECONNECT_MAX_ATTEMPTS = 5
+    // Waits before each reconnect attempt. Exponential rather than flat because the two
+    // cases it serves are far apart: the server restarting its own session is back in a few
+    // hundred milliseconds, while a device that has to re-enumerate over USB takes seconds.
+    // A flat one-second wait paid the slow case's price on every fast one. The total window
+    // is unchanged, so nothing is given up to get the first retry in early.
+    val RECONNECT_DELAYS_MS = listOf(200L, 400L, 800L, 1_600L, 2_000L)
+
+    // Derived, not declared: two numbers that must agree is one that goes stale.
+    val RECONNECT_MAX_ATTEMPTS = RECONNECT_DELAYS_MS.size
     const val STREAM_START_TIMEOUT = 3_000L
 
     const val SOCKET_BUFFER_SIZE = 2 * 1024 * 1024 // 2MB

@@ -1,5 +1,6 @@
 package com.desklink.android.data.network
 
+import android.util.Log
 import com.desklink.android.domain.model.MessageType
 import com.desklink.android.domain.model.ProtocolConstants
 import kotlinx.coroutines.CancellationException
@@ -33,6 +34,7 @@ class KeepAliveController(
                 delay(ProtocolConstants.PING_INTERVAL)
                 val now = clock()
                 if (now - lastPongAt > ProtocolConstants.PING_TIMEOUT) {
+                    Log.i(TAG, "no PONG for ${now - lastPongAt} ms -> reconnecting")
                     onConnectionLost()
                     return@launch
                 }
@@ -42,6 +44,7 @@ class KeepAliveController(
                     throw e
                 } catch (_: Exception) {
                     // A send failure means the socket is gone; treat as lost.
+                    Log.i(TAG, "PING send failed -> reconnecting")
                     onConnectionLost()
                     return@launch
                 }
@@ -70,5 +73,9 @@ class KeepAliveController(
     fun stop() {
         job?.cancel()
         job = null
+    }
+
+    private companion object {
+        const val TAG = "DeskLink"
     }
 }

@@ -160,11 +160,7 @@ class ConnectionManagerImplTest {
         every { client.receivePackets() } answers {
             rxCalls++
             when (rxCalls) {
-                1 -> flow {
-                    emit(MessageType.HANDSHAKE_RESPONSE to ByteArray(0))
-                    emit(MessageType.CONFIG_RESPONSE to ByteArray(0))
-                    emit(MessageType.START_STREAM to ByteArray(0))
-                }
+                1 -> handshakeThenLostFlow()
                 else -> flow<Pair<Byte, ByteArray>> { throw java.io.IOException("lost") }
             }
         }
@@ -183,7 +179,7 @@ class ConnectionManagerImplTest {
 
         // Enough virtual time for every attempt plus margin, derived from the constants so
         // retuning them does not silently make this test vacuous.
-        advanceTimeBy(ProtocolConstants.RECONNECT_DELAY * (ProtocolConstants.RECONNECT_MAX_ATTEMPTS + 2))
+        advanceTimeBy(ProtocolConstants.RECONNECT_DELAYS_MS.sum() + 1_000)
         runCurrent()
 
         assertEquals(
@@ -204,10 +200,8 @@ class ConnectionManagerImplTest {
         every { client.receivePackets() } answers {
             rxCalls++
             when (rxCalls) {
-                1 -> handshakeSuccessFlow()
-                2 -> flow<Pair<Byte, ByteArray>> { throw java.io.IOException("lost") }
-                3 -> handshakeSuccessFlow() // reconnect attempt succeeds
-                else -> flow { kotlinx.coroutines.awaitCancellation() } // stay connected
+                1 -> handshakeThenLostFlow()
+                else -> handshakeSuccessFlow() // reconnect attempt succeeds and stays up
             }
         }
         val manager = ConnectionManagerImpl(hs, client, fakeTransport(), noAuth(), fakeScreenMetrics())
@@ -215,7 +209,7 @@ class ConnectionManagerImplTest {
 
         manager.connect(config)
         // Bounded advance (not advanceUntilIdle): the keep-alive never goes idle.
-        advanceTimeBy(ProtocolConstants.RECONNECT_DELAY + 500)
+        advanceTimeBy(ProtocolConstants.RECONNECT_DELAYS_MS.first() + 500)
         runCurrent()
 
         assertTrue(
@@ -236,8 +230,7 @@ class ConnectionManagerImplTest {
         every { client.receivePackets() } answers {
             rxCalls++
             when (rxCalls) {
-                1 -> handshakeSuccessFlow() // initial Connected
-                2 -> flow<Pair<Byte, ByteArray>> { throw java.io.IOException("lost") } // drop -> reconnect
+                1 -> handshakeThenLostFlow() // Connected, then dropped -> reconnect
                 else -> flow { kotlinx.coroutines.awaitCancellation() }
             }
         }
@@ -245,7 +238,9 @@ class ConnectionManagerImplTest {
         manager.managerScope = backgroundScope
 
         manager.connect(config)
-        runCurrent() // Connected -> lost -> reconnect loop now waiting in its delay
+        // Past the drop, but short of the first retry delay: the loop is now in its wait.
+        advanceTimeBy(ESTABLISHED_BEFORE_DROP_MS + 10)
+        runCurrent()
         assertTrue(
             manager.connectionState.value is ConnectionState.Reconnecting,
             "expected Reconnecting, got ${manager.connectionState.value}",
@@ -266,10 +261,9 @@ class ConnectionManagerImplTest {
         coEvery { client.send(any(), any()) } returns Unit
         coEvery { client.disconnect() } returns Unit
         coEvery { client.connect(any(), any()) } returns Unit
-        every { client.receivePackets() } answers {
-            rxCalls++
-            if (rxCalls % 2 == 1) handshakeSuccessFlow() else flow { kotlinx.coroutines.awaitCancellation() }
-        }
+        // One reader per connection, so one flow per connection -- the alternation this used
+        // to need was an artefact of the socket being handed between readers.
+        every { client.receivePackets() } answers { handshakeSuccessFlow() }
         val manager = ConnectionManagerImpl(hs, client, fakeTransport(), noAuth(), fakeScreenMetrics())
         manager.managerScope = backgroundScope
 
@@ -308,6 +302,17 @@ class ConnectionManagerImplTest {
                     val response = sent.first { it.first == MessageType.AUTH_RESPONSE }.second
                     val clientNonce = response.copyOfRange(0, ProtocolConstants.AUTH_NONCE_LENGTH)
                     emit(MessageType.AUTH_CONFIRM to PairingAuth.serverProof(key, serverNonce, clientNonce))
+                    // Same stream as the handshake: auth is a phase of one connection, not a
+                    // separate reader. Wait for the request before answering it, as a server
+                    // does -- volunteering the response first would let the reader run the
+                    // whole handshake before the connect path has even sent it.
+                    while (sent.none { it.first == MessageType.HANDSHAKE_REQUEST }) {
+                        kotlinx.coroutines.yield()
+                    }
+                    emit(MessageType.HANDSHAKE_RESPONSE to ByteArray(0))
+                    emit(MessageType.CONFIG_RESPONSE to ByteArray(0))
+                    emit(MessageType.START_STREAM to ByteArray(0))
+                    kotlinx.coroutines.awaitCancellation()
                 }
             } else {
                 handshakeSuccessFlow()
@@ -383,9 +388,33 @@ class ConnectionManagerImplTest {
         )
     }
 
+    // Stays open after START_STREAM, which is what a real server does. A flow that ends
+    // there says "the server hung up", and the manager is right to treat it that way.
     private fun handshakeSuccessFlow(): Flow<Pair<Byte, ByteArray>> = flow {
         emit(MessageType.HANDSHAKE_RESPONSE to ByteArray(0))
         emit(MessageType.CONFIG_RESPONSE to ByteArray(0))
         emit(MessageType.START_STREAM to ByteArray(0))
+        kotlinx.coroutines.awaitCancellation()
+    }
+
+    // The handshake succeeds and then the socket dies -- one stream, as on the wire. The
+    // control channel has ONE reader per connection, so a drop cannot be a separate flow.
+    //
+    // The pause matters: a drop inside the handshake window fails the ATTEMPT (the caller
+    // retries), while a drop after it loses an ESTABLISHED session (the reconnect loop
+    // retries). These tests are about the second, so the stream stays up until the connect
+    // path has taken ownership.
+    private fun handshakeThenLostFlow(
+        liveMillis: Long = ESTABLISHED_BEFORE_DROP_MS,
+    ): Flow<Pair<Byte, ByteArray>> = flow {
+        emit(MessageType.HANDSHAKE_RESPONSE to ByteArray(0))
+        emit(MessageType.CONFIG_RESPONSE to ByteArray(0))
+        emit(MessageType.START_STREAM to ByteArray(0))
+        kotlinx.coroutines.delay(liveMillis)
+        throw java.io.IOException("lost")
+    }
+
+    private companion object {
+        const val ESTABLISHED_BEFORE_DROP_MS = 50L
     }
 }

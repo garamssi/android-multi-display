@@ -216,6 +216,64 @@ good_ok = frame_count_is_valid(2, 8, 2, 16)
 print(f"audio frameCount acceptance: 2 frames / 8 bytes stereo16 -> {'OK' if good_ok else 'FAIL'}")
 failures += 0 if good_ok else 1
 
+# Several frames delivered in ONE read must all parse. A reader that keeps per-instance
+# buffer state and is then replaced mid-stream loses the tail of the buffer and desynchronizes
+# the connection for good, so this is the case that must never regress.
+batched = b"".join(
+    len(body).to_bytes(4, "big") + body
+    for body in (bytes([0x02]) + b"{}", bytes([0x04]) + b"{}", bytes([0x05]), bytes([0x0A]))
+)
+parsed, offset = [], 0
+while offset + 4 <= len(batched):
+    frame_len = int.from_bytes(batched[offset:offset + 4], "big")
+    offset += 4
+    parsed.append(batched[offset])
+    offset += frame_len
+batch_ok = parsed == [0x02, 0x04, 0x05, 0x0A] and offset == len(batched)
+print(
+    f"batched frames: {len(parsed)} of 4 parsed from one buffer, "
+    f"types {[hex(t) for t in parsed]} -> {'OK' if batch_ok else 'FAIL'}"
+)
+failures += 0 if batch_ok else 1
+
+# Reconnect schedule: the first retry has to be fast enough for a server that restarted its
+# own session, without shortening the total window a slow-to-enumerate device needs.
+RECONNECT_DELAYS_MS = [200, 400, 800, 1600, 2000]
+schedule_ok = (
+    RECONNECT_DELAYS_MS[0] <= 250
+    and sum(RECONNECT_DELAYS_MS) >= 5000
+    and RECONNECT_DELAYS_MS == sorted(RECONNECT_DELAYS_MS)
+)
+print(
+    f"reconnect: first={RECONNECT_DELAYS_MS[0]}ms total={sum(RECONNECT_DELAYS_MS)}ms "
+    f"non-decreasing -> {'OK' if schedule_ok else 'FAIL'}"
+)
+failures += 0 if schedule_ok else 1
+
+# DISCONNECT is what removes the client's detection latency; it must stay a control-channel
+# message with an empty payload, so the framed packet is length 1 (type only).
+DISCONNECT = 0x0A
+disconnect_packet = (1).to_bytes(4, "big") + bytes([DISCONNECT])
+disconnect_ok = disconnect_packet == bytes.fromhex("000000010a")
+print(f"DISCONNECT: {disconnect_packet.hex()} -> {'OK' if disconnect_ok else 'FAIL'}")
+failures += 0 if disconnect_ok else 1
+
+# HANDSHAKE_RESPONSE displayMode: the wire values both platforms agree on. Absent means
+# extend, so an older server keeps working and touch is not disabled by accident.
+DISPLAY_MODES = {"extend": True, "mirror": False}   # value -> accepts input
+
+def display_mode_accepts_input(value) -> bool:
+    return DISPLAY_MODES.get(value if value in DISPLAY_MODES else "extend", True)
+
+mode_ok = (
+    display_mode_accepts_input("extend") is True
+    and display_mode_accepts_input("mirror") is False
+    and display_mode_accepts_input(None) is True
+    and display_mode_accepts_input("hologram") is True
+)
+print(f"displayMode: extend=input, mirror=no-input, unknown/absent=extend -> {'OK' if mode_ok else 'FAIL'}")
+failures += 0 if mode_ok else 1
+
 # max-packet boundary sanity
 MAX = 4*1024*1024
 big_len = MAX

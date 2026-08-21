@@ -4,7 +4,7 @@ public final class ControlChannelUseCase: Sendable {
     private let server: any StreamServing
     private let receiver: any PacketReceiving
     private let monitor: ConnectionMonitor
-    private let handshakeHandler = HandshakeHandler()
+    private let handshakeHandler: HandshakeHandler
 
     private let authGate: AuthGate
 
@@ -21,8 +21,10 @@ public final class ControlChannelUseCase: Sendable {
         authKeyProvider: @escaping @Sendable () -> Data? = { nil },
         onStreamStart: @escaping @Sendable (DisplayConfig) async throws -> Void = { _ in },
         onClientConnected: @escaping @Sendable (ClientInfo, DisplayConfig) async -> Void = { _, _ in },
-        onClientDisconnected: @escaping @Sendable () async -> Void = { }
+        onClientDisconnected: @escaping @Sendable () async -> Void = { },
+        displayMode: DisplayMode = DisplayModePreference.defaultMode
     ) {
+        self.handshakeHandler = HandshakeHandler(displayMode: displayMode)
         self.server = server
         self.receiver = receiver
         self.monitor = monitor
